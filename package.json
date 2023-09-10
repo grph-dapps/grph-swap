@@ -1,0 +1,19 @@
+{
+  "name": "grph-swap",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "scilla:deploy:test:step1": "node scilla/deployment/test/step_1/deploySwapContract.js",
+    "scilla:deploy:test:step2": "node scilla/deployment/test/step_2/setRewardsToken.js",
+    "scilla:deploy:test:step3": "node scilla/deployment/test/step_3/setTokenToWhitelist.js",
+    "scilla:deploy:test:step4": "node scilla/deployment/test/step_4/createPools.js"
+  },
+  "author": "Anas Saber <anastal2001@yahoo.com>",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@zilliqa-js/crypto": "^3.4.4",
+    "@zilliqa-js/util": "^3.4.4",
+    "@zilliqa-js/zilliqa": "^3.4.4"
+  }
+}

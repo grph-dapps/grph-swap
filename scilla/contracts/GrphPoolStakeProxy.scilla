@@ -1,0 +1,274 @@
+(* Single Side Liquidity Provider for CARBSwap *)
+
+(***************************************************)
+(*                 Scilla version                  *)
+(***************************************************)
+
+scilla_version 0
+
+import IntUtils PairUtils BoolUtils ListUtils
+
+(***************************************************)
+(*               Associated library                *)
+(***************************************************)
+library LiquidityProviderStakeProxyLib
+
+let true = True
+let false = False
+let oneUint256 = Uint256 1
+let zeroUint128 = Uint128 0
+let oneUint128 = Uint128 1
+let nullAddress = 0x0000000000000000000000000000000000000000
+
+let one_msg =
+  fun (msg: Message) =>
+  let nil_msg = Nil {Message} in
+  Cons {Message} msg nil_msg
+
+let two_msgs =
+  fun (msg1: Message) =>
+  fun (msg2: Message) =>
+    let msgs_tmp = one_msg msg2 in
+    Cons {Message} msg1 msgs_tmp
+
+let three_msgs =
+  fun (msg1: Message) =>
+  fun (msg2: Message) =>
+  fun (msg3: Message) =>
+    let msgs_tmp = one_msg msg2 in
+    let msgs = Cons {Message} msg1 msgs_tmp in
+    Cons {Message} msg3 msgs
+
+let get_token_reward = @snd ByStr20 ByStr20
+let get_token_reward_contract = @fst ByStr20 ByStr20
+
+let get_uint128_value = fun(op_value: Option Uint128) => match op_value with | Some value => value | None => zeroUint128 end
+
+let map_pair_to_stake_contract_message =
+  fun (tag: String) =>
+  fun (account: ByStr20) =>
+  fun (op_balance: Option Uint128) =>
+  fun (op_total_supply: Option Uint128) =>
+  fun (stake_contracts: Map ByStr20 Uint128) =>
+  fun (pair: Pair ByStr20 ByStr20) =>
+    let token_reward = get_token_reward pair in
+    let reward_contract = get_token_reward_contract pair in
+    let op_reward_rate = builtin get stake_contracts reward_contract in
+    let balance = get_uint128_value op_balance in
+    let token_total_supply = get_uint128_value op_total_supply in
+    let reward_rate = get_uint128_value op_reward_rate in
+    {
+        _tag: tag;
+        _recipient: reward_contract;
+        _amount: zeroUint128;
+        account: account;
+        balance: balance;
+        totalSupply: token_total_supply;
+        rewardRate: reward_rate
+    }
+
+let map_pair_to_messages =
+  fun (tag: String) =>
+  fun (account: ByStr20) =>
+  fun (op_balance: Option Uint128) =>
+  fun (op_total_supply: Option Uint128) =>
+  fun (stake_contracts: Map ByStr20 Uint128) =>
+  fun (pairs: List (Pair ByStr20 ByStr20)) =>
+    let mapper = @list_map (Pair ByStr20 ByStr20) Message in
+    let f = map_pair_to_stake_contract_message tag account op_balance op_total_supply stake_contracts in
+    mapper f pairs
+
+
+(***************************************************)
+(*             The contract definition             *)
+(***************************************************)
+
+contract LiquidityProviderStakeProxy(contract_owner: ByStr20, grph_swap: ByStr20)
+
+field owner: ByStr20 = contract_owner
+field pending_owner: Option ByStr20 = None {ByStr20}
+
+(* token_pool => (stake_contract => rewards_token) *)
+field pools: Map ByStr20 (Map ByStr20 ByStr20) = Emp ByStr20 (Map ByStr20 ByStr20)
+
+(* stake_contract => account *)
+field stake_owners: Map ByStr20 ByStr20 = Emp ByStr20 ByStr20
+(* stake_contract => reward_rate *)
+field stake_contracts: Map ByStr20 Uint128 = Emp ByStr20 Uint128
+(* stake_contract => token_pool *)
+field stake_contract_pool: Map ByStr20 ByStr20 = Emp ByStr20 ByStr20
+
+(* token_pool => (account => amount) *)
+field balances: Map ByStr20 (Map ByStr20 Uint128) = Emp ByStr20 (Map ByStr20 Uint128)
+field totalSupply: Map ByStr20 Uint128 = Emp ByStr20 Uint128
+
+field pending_stake_contracts: Map ByStr20 ByStr20 = Emp ByStr20 ByStr20
+
+
+
+procedure ThrowError(msg: String)
+  e = { _exception : msg };
+  throw e
+end
+
+procedure OnlyOwner(account: ByStr20)
+  r_owner <- owner;
+  isOwner = builtin eq account r_owner;
+  match isOwner with
+    | True => (* ok *)
+    | False =>
+      msg = "NotOwner";
+      ThrowError msg
+  end
+end
+
+
+procedure OnlySwap(account: ByStr20)
+  isSwap = builtin eq account grph_swap;
+  match isSwap with
+    | True => (* ok *)
+    | False =>
+      msg = "NotSwap";
+      ThrowError msg
+  end
+end
+
+procedure IsStakeOwner(account: ByStr20, stake_contract: ByStr20)
+   r_stake_owner <- stake_owners[stake_contract];
+   match r_stake_owner with
+     | Some stake_owner =>
+       isStakeOwner = builtin eq account stake_owner;
+       match isStakeOwner with
+        | True => (* ok *)
+        | False =>
+          msg = "NotStakeOwner";
+          ThrowError msg
+       end
+     | None =>
+       msg = "NotStakeOwner";
+       ThrowError msg
+   end
+end
+
+procedure IsOwnerOrStakeOwner(account: ByStr20, stake_contract: ByStr20)
+    r_owner <- owner;
+    isOwner = builtin eq account r_owner;
+    match isOwner with
+      | True => (* ok *)
+      | False => IsStakeOwner account stake_contract
+    end
+end
+
+procedure AddNewStakeContract(pool: ByStr20, stake_contract: ByStr20, reward_token: ByStr20, token_owner: ByStr20, reward_rate: Uint128)
+  stake_contract_pool[stake_contract] := pool;
+  stake_owners[reward_token] := token_owner;
+  pools[pool][stake_contract] := reward_token;
+  stake_contracts[stake_contract] := reward_rate
+end
+
+
+(* public functions *)
+
+transition SetRewardsToken(pool: ByStr20, stake_contract: ByStr20, reward_token: ByStr20, token_owner: ByStr20, reward_rate: Uint128)
+  OnlyOwner _sender;
+  AddNewStakeContract pool stake_contract reward_token token_owner reward_rate
+end
+
+transition RemoveStakeContract(pool: ByStr20, stake_contract: ByStr20)
+    OnlyOwner _sender;
+    delete stake_contracts[stake_contract];
+    delete stake_contract_pool[stake_contract];
+    delete pools[pool][stake_contract];
+    msg = {
+      _tag: "CloseRewards";
+      _recipient: stake_contract;
+      _amount: zeroUint128
+    };
+    sendCloseRewardsMsg = one_msg msg;
+    send sendCloseRewardsMsg
+end
+
+transition PenndingStakeContract(stake_owner: ByStr20, stake_contract: ByStr20)
+  OnlyOwner _sender;
+  pending_stake_contracts[stake_owner] := stake_contract
+end
+
+transition UpdateRewardsTokenRate(stake_contract: ByStr20, reward_rate: Uint128)
+    IsStakeOwner _sender stake_contract;
+    r_pool <- stake_contract_pool[stake_contract];
+    r_pending_stake_contract <- pending_stake_contracts[_sender];
+    errorMsg = "FailedToUpdateRewards";
+    match r_pending_stake_contract with
+      | Some new_stake_contract =>
+          match r_pool with
+           | Some pool =>
+              r_reward_token <- pools[pool][stake_contract];
+              match r_reward_token with
+                | Some reward_token =>
+                  delete pending_stake_contracts[_sender];
+                  AddNewStakeContract pool new_stake_contract reward_token _sender reward_rate;
+                  msg = {
+                    _tag: "CloseRewards";
+                    _recipient: stake_contract;
+                    _amount: zeroUint128
+                  };
+                  sendCloseRewardsMsg = one_msg msg;
+                  send sendCloseRewardsMsg
+                | None => ThrowError errorMsg
+              end
+            | None => ThrowError errorMsg
+          end
+      | None => ThrowError errorMsg
+    end
+end
+
+transition Stake(pool: ByStr20, account: ByStr20, amount: Uint128, total_contribution: Uint128)
+    OnlySwap _sender;
+    totalSupply[pool] := total_contribution;
+    balances[pool][account] := amount;
+    r_stake_contracts <- pools[pool];
+    match r_stake_contracts with
+    | Some stake_rewards_contracts =>
+      stake_token_pair = builtin to_list stake_rewards_contracts; (* List (Pair rewards_contract rewards_token) *)
+      tag = "Add";
+      op_balance <- balances[pool][account];
+      op_total_supply <- totalSupply[pool];
+      r_stake_contracts <- stake_contracts;
+      sendAddStakeMgs = map_pair_to_messages tag account op_balance op_total_supply r_stake_contracts stake_token_pair; (* messages *)
+      send sendAddStakeMgs
+    | None => (* nothing *)
+    end
+end
+
+transition Withdraw(pool: ByStr20, account: ByStr20, amount: Uint128, total_contribution: Uint128)
+    OnlySwap _sender;
+    totalSupply[pool] := total_contribution;
+    balances[pool][account] := amount;
+    r_stake_contracts <- pools[pool];
+    match r_stake_contracts with
+    | Some stake_rewards_contracts =>
+      stake_token_pair = builtin to_list stake_rewards_contracts; (* List (Pair rewards_contract rewards_token) *)
+      tag = "Remove";
+      op_balance <- balances[pool][account];
+      op_total_supply <- totalSupply[pool];
+      r_stake_contracts <- stake_contracts;
+      sendRemoveStakeMgs = map_pair_to_messages tag account op_balance op_total_supply r_stake_contracts stake_token_pair; (* messages *)
+      send sendRemoveStakeMgs
+    | None => (* nothing *)
+    end
+end
+
+transition Reward(pool: ByStr20)
+    r_stake_contracts <- pools[pool];
+    match r_stake_contracts with
+    | Some stake_rewards_contracts =>
+      stake_token_pair = builtin to_list stake_rewards_contracts; (* List (Pair rewards_contract rewards_token) *)
+      tag = "Reward";
+      op_balance <- balances[pool][_sender];
+      op_total_supply <- totalSupply[pool];
+      r_stake_contracts <- stake_contracts;
+      sendRewardMgs = map_pair_to_messages tag _sender op_balance op_total_supply r_stake_contracts stake_token_pair; (* messages *)
+      send sendRewardMgs
+    | None => (* nothing *)
+    end
+end

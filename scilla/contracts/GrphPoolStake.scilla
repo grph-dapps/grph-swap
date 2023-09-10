@@ -1,0 +1,287 @@
+(* Single Side Liquidity Provider for CARBSwap *)
+
+(***************************************************)
+(*                 Scilla version                  *)
+(***************************************************)
+
+scilla_version 0
+
+import IntUtils PairUtils BoolUtils ListUtils
+
+(***************************************************)
+(*               Associated library                *)
+(***************************************************)
+library LiquidityProviderStakeLib
+
+let one_msg =
+  fun (msg: Message) =>
+  let nil_msg = Nil {Message} in
+  Cons {Message} msg nil_msg
+
+let two_msgs =
+  fun (msg1: Message) =>
+  fun (msg2: Message) =>
+    let msgs_tmp = one_msg msg2 in
+    Cons {Message} msg1 msgs_tmp
+
+let three_msgs =
+  fun (msg1: Message) =>
+  fun (msg2: Message) =>
+  fun (msg3: Message) =>
+    let msgs_tmp = one_msg msg2 in
+    let msgs = Cons {Message} msg1 msgs_tmp in
+    Cons {Message} msg3 msgs
+
+let true = True
+let false = False
+let oneUint256 = Uint256 1
+let zeroUint128 = Uint128 0
+let oneUint128 = Uint128 1
+let nullAddress = 0x0000000000000000000000000000000000000000
+
+
+let blockToUint128: BNum -> Uint128 =
+  fun(block: BNum) =>
+    let zeroBlock = BNum 0 in
+    let initBlock = builtin bsub block zeroBlock in
+    let op_uint128 = builtin to_uint128 initBlock in
+    match op_uint128 with | Some value => value | None => Uint128 0 end
+
+(***************************************************)
+(*             The contract definition             *)
+(***************************************************)
+
+contract LiquidityProviderStake(
+  contract_owner: ByStr20,
+  proxy: ByStr20,
+  reward_token: ByStr20,
+  token_multiplier: Uint128,
+  is_mint: Bool,
+  is_zil: Bool
+)
+
+field owner: ByStr20 = contract_owner
+
+field pending_owner: Option ByStr20 = None {ByStr20}
+
+field lastUpdatedBlock: Uint128 = zeroUint128
+field rewardPerTokenStored: Uint128 = zeroUint128
+
+field userRewardsPerTokenPaid: Map ByStr20 Uint128 = Emp ByStr20 Uint128
+field rewards: Map ByStr20 Uint128 = Emp ByStr20 Uint128
+
+field is_closed: Bool = false
+field closed_block: BNum = BNum 0
+
+field claimedAfterClose: Map ByStr20 Bool = Emp ByStr20 Bool
+
+
+procedure ThrowError(msg: String)
+  e = { _exception : msg };
+  throw e
+end
+
+procedure OnlyOwner(account: ByStr20)
+  r_owner <- owner;
+  isOwner = builtin eq account r_owner;
+  match isOwner with
+    | True => (* ok *)
+    | False =>
+      msg = "NotOwner";
+      ThrowError msg
+  end
+end
+
+
+procedure OnlyProxy(account: ByStr20)
+  isProxy = builtin eq account proxy;
+  match isProxy with
+    | True => (* ok *)
+    | False =>
+      msg = "NotProxy";
+      ThrowError msg
+  end
+end
+
+procedure MintToken(to: ByStr20, amount: Uint128)
+  e = { _eventname: "RewardClaimed" };
+  event e;
+  sendMintMsg = { _tag: "Mint"; _recipient: reward_token; _amount: zeroUint128; to: to; amount: amount };
+  msgs = one_msg sendMintMsg;
+  send msgs
+end
+
+procedure TransferToken(to: ByStr20, amount: Uint128)
+  e = { _eventname: "RewardClaimed" };
+  event e;
+  sendTokenMsg = { _tag: "Transfer"; _recipient: reward_token; _amount: zeroUint128; to: to; amount: amount };
+  msgs = one_msg sendTokenMsg;
+  send msgs
+end
+
+procedure TransferZil(to: ByStr20, amount: Uint128)
+  e = { _eventname: "RewardClaimed" };
+  event e;
+  sendTokenMsg = { _tag: "SendZil"; _recipient: to; _amount: amount };
+  msgs = one_msg sendTokenMsg;
+  send msgs
+end
+
+procedure DoUpdateRewards(account: ByStr20, balance: Uint128, totalSupply: Uint128, rewardRate: Uint128)
+  isTotalSupplyZero = builtin eq totalSupply zeroUint128;
+
+  r_rewardPerTokenStored <- rewardPerTokenStored;
+  r_lastUpdatedBlock <- lastUpdatedBlock;
+
+  is_rewards_closed <- is_closed;
+  block <- closed_block;
+
+  blk <- & BLOCKNUMBER;
+  currentBlock = match is_rewards_closed with | True =>  blockToUint128 block | False => blockToUint128 blk end;
+
+  newRewardPerTokenStored = match isTotalSupplyZero with
+    | True => r_rewardPerTokenStored
+    | False =>
+      let timeDiff = builtin sub currentBlock r_lastUpdatedBlock in
+      let timeRate = builtin mul rewardRate timeDiff in
+      let timeRateTokenMultiplier = builtin mul token_multiplier timeRate in
+      let divTotalSupply = builtin div timeRateTokenMultiplier totalSupply in
+      builtin add r_rewardPerTokenStored divTotalSupply
+  end;
+
+
+  isContract = builtin eq _this_address account;
+
+  match isContract with
+    | True => (* nothing to do*)
+    | False =>
+      rewardPerTokenStored := newRewardPerTokenStored;
+      lastUpdatedBlock := currentBlock;
+
+      op_reward <- rewards[account];
+      op_paid <- userRewardsPerTokenPaid[account];
+
+      (* multiplier = Uint128 10000; *)
+      (* r_reward = match op_reward with | Some value => builtin mul value multiplier | None => zeroUint128 end; *)
+
+      r_paid = match op_paid with | Some value => value | None => zeroUint128 end;
+      r_reward = match op_reward with | Some value => value | None => zeroUint128 end;
+
+
+      diffRewardsPerToken = builtin sub newRewardPerTokenStored r_paid;
+      balanceMulDiff = builtin mul diffRewardsPerToken balance;
+      divTokenMultiplier = builtin div balanceMulDiff token_multiplier;
+      (* workaround *)
+      multiplier = Uint128 1000;
+      r_divTokenMultiplier = builtin mul divTokenMultiplier multiplier;
+      sumRewardsAsRewardToken = builtin add r_divTokenMultiplier r_reward;
+
+      rewards[account] := sumRewardsAsRewardToken;
+      userRewardsPerTokenPaid[account] := newRewardPerTokenStored
+  end
+end
+
+procedure UpdateRewards(account: ByStr20, balance: Uint128, totalSupply: Uint128, rewardRate: Uint128)
+  r_is_closed <- is_closed;
+  match r_is_closed with
+    | True =>
+      r_claimed_account <- claimedAfterClose[account];
+      is_claimed = match r_claimed_account with | Some value => value | None => false end;
+      match is_claimed with
+        | True => (* nothing *)
+        | False =>
+          claimedAfterClose[account] := true;
+          DoUpdateRewards account balance totalSupply rewardRate
+      end
+    | False => DoUpdateRewards account balance totalSupply rewardRate
+  end
+end
+
+procedure AddStake(account: ByStr20, balance: Uint128, totalSupply: Uint128, rewardRate: Uint128)
+  UpdateRewards account balance totalSupply rewardRate
+end
+
+procedure RemoveStake(account: ByStr20, balance: Uint128, totalSupply: Uint128, rewardRate: Uint128)
+  UpdateRewards account balance totalSupply rewardRate
+end
+
+(* public functions *)
+
+transition Add(account: ByStr20, balance: Uint128, totalSupply: Uint128, rewardRate: Uint128)
+  OnlyProxy _sender;
+  AddStake account balance totalSupply rewardRate
+end
+
+transition Remove(account: ByStr20, balance: Uint128, totalSupply: Uint128, rewardRate: Uint128)
+  OnlyProxy _sender;
+  RemoveStake account balance totalSupply rewardRate
+end
+
+transition Reward(account: ByStr20, balance: Uint128, totalSupply: Uint128, rewardRate: Uint128)
+  OnlyProxy _sender;
+  UpdateRewards account balance totalSupply rewardRate;
+  r_reward <- rewards[account];
+  match r_reward with
+    | Some reward =>
+        rewards[account] := zeroUint128;
+        isGreaterZero = uint128_gt reward zeroUint128;
+        match isGreaterZero with
+          | True =>
+            match is_mint with
+             | True => MintToken _sender reward
+             | False => match is_zil with | True => TransferZil _sender reward | False => TransferToken _sender reward end
+            end
+          | False => (* nothing *)
+        end
+    | None => (* nothing *)
+  end
+end
+
+transition RequestOwnershipTransfer(new_owner : ByStr20)
+  OnlyOwner _sender;
+  po = Some {ByStr20} new_owner;
+  pending_owner := po
+end
+
+transition ConfirmOwnershipTransfer()
+  optional_po <- pending_owner;
+  match optional_po with
+  | Some pend_owner =>
+      caller_is_new_owner = builtin eq _sender pend_owner;
+      match caller_is_new_owner with
+      | True =>
+          (* transfer ownership *)
+          owner := pend_owner;
+          none = None {ByStr20};
+          pending_owner := none
+      | False => (* the caller is not the new owner, do nothing *)
+      end
+  | None => (* ownership transfer is not in-progress, do nothing *)
+  end
+end
+
+transition AddFunds()
+  accept
+end
+
+transition CloseRewards()
+  OnlyProxy _sender;
+  is_closed := true;
+  s_closed_block <- & BLOCKNUMBER;
+  closed_block := s_closed_block
+end
+
+transition MintSuccessCallBack(minter: ByStr20, recipient: ByStr20, amount: Uint128)
+end
+
+transition RecipientAcceptTransfer(sender: ByStr20, recipient: ByStr20, amount: Uint128)
+end
+
+transition RecipientAcceptTransferFrom(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+end
+
+transition TransferFromSuccessCallBack(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+end
+
+transition TransferSuccessCallBack(sender: ByStr20, recipient: ByStr20, amount: Uint128)
+end

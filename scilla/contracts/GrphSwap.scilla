@@ -1,0 +1,1275 @@
+scilla_version 0
+
+import BoolUtils IntUtils ListUtils PairUtils
+
+library GRPHSwap
+
+type Mint = | Mint of BNum Uint128
+type Denom = | Zil | Grph | Token of ByStr20 (* token address / hash *)
+type Coins = | Coins of Denom Uint128 (* denom, amount *)
+type Pool = | Pool of Uint128 Uint128 (* x, y = carb reserve, token reserve *)
+type SwapDirection = | GrphToToken | TokenToGrph
+type ExactSide = | ExactInput | ExactOutput
+type Swap = | Swap of (Option Pool) SwapDirection ExactSide Uint128 (Option Uint128) Uint256 (* exact amt, limit amt, after fee amt *)
+type ResultOrError =
+ | Result of Uint128 (* unwrapped pool, calculated amount *)
+ | Error of String
+
+type SwapResult = | AfterSwap of Uint128 ResultOrError
+
+let zero = Uint128 0
+let one = Uint128 1
+let fee_denom = Uint256 10000 (* fee denominated in basis points (1 b.p. = 0.01%) *)
+let empty_address = 0x0000000000000000000000000000000000000000
+let zil = Zil
+let grph = Grph
+
+let true = True
+let false = False
+
+let oneMsg : Message -> List Message =
+  fun (msg : Message) =>
+    let nil_msg = Nil {Message} in
+    Cons {Message} msg nil_msg
+
+let twoMsgs =
+  fun (msg1 : Message) =>
+  fun (msg2 : Message) =>
+    let msgs_tmp = oneMsg msg2 in
+    Cons {Message} msg1 msgs_tmp
+
+let grow : Uint128 -> Uint256 =
+  fun (var : Uint128) =>
+    let maybe_big = builtin to_uint256 var in
+    match maybe_big with
+    | Some big => big
+    | None => Uint256 0 (* should never happen *)
+    end
+
+(* computes the amount of the fraction x / d that is in y *)
+let frac : Uint128 -> Uint128 -> Uint128 -> Option Uint128  =
+  fun (d : Uint128) =>
+  fun (x : Uint128) =>
+  fun (y : Uint128) =>
+    let big_x = grow x in
+    let big_y = grow y in
+    let big_d = grow d in
+    let d_times_y = builtin mul big_d big_y in
+    let d_times_y_over_x = builtin div d_times_y big_x in
+    builtin to_uint128 d_times_y_over_x
+
+let getValueU128 : Option Uint128 -> Uint128 =
+  fun (op_u128: Option Uint128) =>
+    match op_u128 with
+      | Some value => value
+      | None => Uint128 0
+    end
+
+
+(* computes the output that should be taken from the output reserve
+   when the given input amount is added to the input reserve *)
+let outputFor : Uint128 -> Uint128 -> Uint128 -> Uint128 =
+  fun (input_amount_u128 : Uint128) =>
+  fun (input_reserve_u128 : Uint128) =>
+  fun (output_reserve_u128 : Uint128) =>
+    let input_amount = grow input_amount_u128 in
+    let input_reserve = grow input_reserve_u128 in
+    let output_reserve = grow output_reserve_u128 in
+    let numerator = builtin mul input_amount output_reserve in
+    let denominator = builtin add input_reserve input_amount in
+    let result = builtin div numerator denominator in
+    let op_result = builtin to_uint128 result in
+    getValueU128 op_result
+
+
+(* computes the input that should be given to the input reserve
+   when the given output amount is removed from the output reserve *)
+let inputFor : Uint128 -> Uint128 -> Uint128 -> Uint128 =
+  fun (output_amount_u128 : Uint128) =>
+  fun (input_reserve_u128 : Uint128) =>
+  fun (output_reserve_u128 : Uint128) =>
+    let output_amount = grow output_amount_u128 in
+    let input_reserve = grow input_reserve_u128 in
+    let output_reserve = grow output_reserve_u128 in
+    let numerator = builtin mul input_reserve output_amount in
+    let denominator = builtin sub output_reserve output_amount in
+    let result = builtin div numerator denominator in
+    let result_u128 = builtin to_uint128 result in
+    getValueU128 result_u128
+
+
+(* checks whether the result amount is within the user provided
+   limit amount, which is dependent on whether the output or input
+   result was the one being computed *)
+let withinLimits : Uint128 -> Option Uint128 -> ExactSide -> Bool =
+  fun (result_amount : Uint128) =>
+  fun (maybe_limit_amount : Option Uint128) =>
+  fun (exact_side : ExactSide) =>
+    match maybe_limit_amount with
+    | None => True
+    | Some limit_amount =>
+      match exact_side with
+      | ExactInput =>
+        (* we are given an exact input and are computing the output,
+           which should be greater or equal to the limit *)
+        uint128_ge result_amount limit_amount
+      | ExactOutput =>
+        (* we are given an exact output and are computing the input,
+           which should be lower or equal to the limit *)
+        uint128_ge limit_amount result_amount
+      end
+    end
+
+(* computes the corresponding input or output amount for
+   the given exact output or input amount, pool, and direction *)
+let amountFor : Pool -> SwapDirection -> ExactSide -> Uint128 -> Option Uint128 -> Uint256 -> SwapResult =
+  fun (pool : Pool) =>
+  fun (direction : SwapDirection) =>
+  fun (exact_side : ExactSide) =>
+  fun (exact_amount : Uint128) =>
+  fun (maybe_limit_amount: Option Uint128) =>
+  fun (after_fee : Uint256) =>
+    match pool with
+     | Pool carb_reserve token_reserve =>
+       let calc = fun (exact: ExactSide) => match exact with | ExactInput => outputFor | ExactOutput => inputFor end in
+       let result = match direction with
+              | GrphToToken => calc exact_side exact_amount carb_reserve token_reserve
+              | TokenToGrph => calc exact_side exact_amount token_reserve carb_reserve
+            end in
+       let within_limits = withinLimits result maybe_limit_amount exact_side in
+       let zero_u128 = Uint128 0 in
+       match within_limits with
+          | False =>
+                let e = "RequestedRatesCannotBeFulfilled" in
+                let error = Error e in
+                AfterSwap zero_u128 error
+          | True =>
+                let is_zero = builtin eq zero_u128 result in
+                match is_zero with
+                  | True =>
+                    let e = "IntegerOverflow" in
+                    let error = Error e in
+                    AfterSwap zero_u128 error
+                  | False =>
+                    let amount_in_carb = match direction with
+                     | GrphToToken => inputFor result carb_reserve token_reserve
+                     | TokenToGrph => result
+                    end in
+                    let zero_256 = Uint256 0 in
+                    let is_fee_zero = builtin eq after_fee zero_256 in
+                    let swap_fee_u128 = match is_fee_zero with
+                      | False =>
+                        let amount_in_carb_u256 = grow amount_in_carb in
+                        let cute = builtin div fee_denom after_fee in
+                        let swap_fee = builtin div amount_in_carb_u256 cute in
+                        let op_swap_fee_u128 = builtin to_uint128 swap_fee in
+                        getValueU128 op_swap_fee_u128
+                      | True => Uint128 0
+                    end in
+                    let new_result = Result result in
+                    AfterSwap swap_fee_u128 new_result
+                end
+            end
+    end
+
+
+
+(* computes the resultant amount for the given swap *)
+let resultFor : Swap -> SwapResult =
+  fun (swap : Swap) =>
+    match swap with
+    | Swap maybe_pool direction exact_side exact_amount maybe_limit_amount after_fee =>
+      match maybe_pool with
+        | None =>
+          let e = "MissingPool" in
+          let error = Error e in
+          let zero_u128 = Uint128 0 in
+          AfterSwap zero_u128 error
+        | Some pool => amountFor pool direction exact_side exact_amount maybe_limit_amount after_fee
+      end
+    end
+
+(* checks whether the given pool is empty based
+   on where either of the token reserve amounts are zero *)
+let poolEmpty : Pool -> Bool =
+  fun (p : Pool) =>
+    match p with
+    | Pool x y =>
+      let x_empty = builtin lt x one in
+      let y_empty = builtin lt y one in
+      orb x_empty y_empty
+    end
+
+let emptyPool =
+  let zero_u128 = Uint128 0 in
+  Pool zero_u128 zero_u128
+
+
+let get_addresses : List (Pair ByStr20 Bool) -> List ByStr20 =
+    fun(list : List (Pair ByStr20 Bool)) =>
+      let fst = @fst ByStr20 Bool in
+      let map = @list_map (Pair ByStr20 Bool) ByStr20 in
+      let f = fun(p: Pair ByStr20 Bool) => fst p in
+      map f list
+
+
+let swap_fees =
+    fun(fee: Uint128) =>
+    fun(pool: Pool) =>
+      match pool with
+        | Pool x y => outputFor fee x y
+      end
+
+
+contract GRPHSwap
+(
+  initial_owner : ByStr20,
+  initial_fee : Uint256,
+  grph_address: ByStr20
+)
+
+
+field pools : Map ByStr20 Pool = Emp ByStr20 Pool
+field balances : Map ByStr20 (Map ByStr20 Uint128) = Emp ByStr20 (Map ByStr20 Uint128)
+field total_contributions : Map ByStr20 Uint128 = Emp ByStr20 Uint128
+
+field min_grph: Uint128 = Uint128 100000000000
+
+field output_after_fee : Uint256 = initial_fee
+
+field stake_proxy : ByStr20 = empty_address
+
+field grph_balances : Map ByStr20 Uint128 = Emp ByStr20 Uint128
+
+field owner : ByStr20 = initial_owner
+field pending_owner : ByStr20 = empty_address
+field admin: ByStr20 = initial_owner
+
+field can_remove_liquidity: Map ByStr20 Bool = Emp ByStr20 Bool
+
+
+field whitelisted_token : Map ByStr20 Bool = Emp ByStr20 Bool
+field blacklist_token: Map ByStr20 Bool = Emp ByStr20 Bool
+
+field zil_address: ByStr20 = empty_address
+
+field is_paused: Bool = true
+
+
+(* statics *)
+field total_input: Map ByStr20 Uint128 = Emp ByStr20 Uint128
+field total_output: Map ByStr20 Uint128 = Emp ByStr20 Uint128
+
+field total_fees_used: Map ByStr20 (Map ByStr20 Uint128) = Emp ByStr20 (Map ByStr20 Uint128)
+
+field swap_fees_balance: Uint128 = Uint128 0
+field total_burnt_fees: Uint128 = Uint128 0
+
+
+procedure ThrowIfExpired(deadline_block: BNum)
+  current_block <- & BLOCKNUMBER;
+  is_not_expired = builtin blt current_block deadline_block;
+  match is_not_expired with
+  | True =>
+  | False =>
+    e = { _exception : "TransactionExpired" };
+    throw e
+  end
+end
+
+procedure ThrowIfZero(number: Uint128)
+  gt_zero = uint128_gt number zero;
+  match gt_zero with
+  | True =>
+  | False =>
+    e = { _exception : "InvalidAmount" };
+    throw e
+  end
+end
+
+procedure IsPaused()
+  paused <- is_paused;
+  match paused with
+    | True =>
+        e = { _exception : "ContractPaused" };
+        throw e
+    | False => (*ok*)
+  end
+end
+
+procedure CanRemoveLiquidity(account: ByStr20)
+  op_is_member <- can_remove_liquidity[account];
+  is_member = match op_is_member with | Some value => value | None => False end;
+  match is_member with
+    | True =>
+    | False =>
+        e = { _exception : "CanNotRemoveLiquidity" };
+        throw e
+  end
+end
+
+procedure IsWhiteListedToken(token: ByStr20)
+  op_is_whitelisted_token <- whitelisted_token[token];
+  is_whitelisted_token = match op_is_whitelisted_token with | Some value => value | None => False end;
+  match is_whitelisted_token with
+    | True =>
+    | False =>
+        e = { _exception : "NotWhitelistedToken" };
+        throw e
+  end
+end
+
+procedure ThrowIfGrph(address : ByStr20)
+  is_grph = builtin eq address grph_address;
+  match is_grph with
+  | False =>
+  | True =>
+    e = { _exception : "InvalidTokenAddress" };
+    throw e
+  end
+end
+
+procedure ThrowUnlessIsNotBlacklist(token: ByStr20)
+  op_is_blacklist <- blacklist_token[token];
+  match op_is_blacklist with
+    | Some is_blacklist =>
+      match is_blacklist with
+        | True =>
+          e = { _exception : "BlacklistedToken" };
+          throw e
+        | False => (*ok*)
+      end
+    | None => (*ok*)
+  end
+end
+
+procedure ThrowUnlessSenderIsOwner()
+  current_owner <- owner;
+  is_owner = builtin eq _sender current_owner;
+  match is_owner with
+  | True =>
+  | False =>
+    e = { _exception : "InvalidSender" };
+    throw e
+  end
+end
+
+procedure ThrowUnlessSenderIsAdmin(account: ByStr20)
+  current_admin <- admin;
+  is_owner = builtin eq account current_admin;
+  match is_owner with
+  | True =>
+  | False =>
+    e = { _exception : "InvalidAdmin" };
+    throw e
+  end
+end
+
+procedure Send(coins : Coins, to_address : ByStr20)
+  match coins with
+  | Coins denom amount =>
+    match denom with
+    | Grph =>
+      msg_to_token = {_tag : "TransferFrom"; _recipient: grph_address; _amount: zero; from: _this_address; to: to_address; amount: amount};
+      msgs = oneMsg msg_to_token;
+      send msgs
+    | Zil =>
+      msg = { _tag : "AddFunds"; _recipient: to_address; _amount: amount };
+      msgs = oneMsg msg;
+      send msgs
+    | Token token =>
+      msg_to_token = {
+        _tag : "Transfer"; _recipient: token; _amount: zero;
+        to: to_address; amount: amount
+      };
+      msgs = oneMsg msg_to_token;
+      send msgs
+    end
+  end
+end
+
+procedure Receive(coins : Coins)
+  match coins with
+  | Coins denom amount =>
+    match denom with
+    | Grph =>
+      msg_to_token = {_tag : "TransferFrom"; _recipient: grph_address; _amount: zero; from: _sender; to: _this_address; amount: amount};
+      msgs = oneMsg msg_to_token;
+      send msgs
+    | Zil =>
+      insufficient_zil = uint128_lt _amount amount;
+      match insufficient_zil with
+        | False => (*ok*)
+        | True =>
+          e = { _exception : "InvalidZILAmount" };
+          throw e
+      end;
+      needs_refund = uint128_gt _amount amount;
+      accept;
+      match needs_refund with
+      | True =>
+        refund =
+          let refund_amount = builtin sub _amount amount in
+          Coins zil refund_amount;
+        Send refund _sender
+      | False => (* do nothing *)
+      end
+    | Token token =>
+      msg_to_token = {
+        _tag : "TransferFrom"; _recipient: token; _amount: zero;
+        from: _sender; to: _this_address; amount: amount
+      };
+      msgs = oneMsg msg_to_token;
+      send msgs
+    end
+  end
+end
+
+procedure UpdateTotalOutput(denom: Denom, output: Uint128)
+    token_address = match denom with
+        | Zil => empty_address
+        | Grph => grph_address
+        | Token token_address => token_address
+    end;
+    op_amount <- total_output[token_address];
+    new_amount = match op_amount with | Some value => builtin add value output | None => output end;
+    total_output[token_address] := new_amount
+end
+
+procedure UpdateTotalInput(denom: Denom, input: Uint128)
+    token_address = match denom with
+        | Zil => empty_address
+        | Grph => grph_address
+        | Token token_address => token_address
+    end;
+    op_amount <- total_input[token_address];
+    new_amount = match op_amount with | Some value => builtin add value input | None => input end;
+    total_input[token_address] := new_amount
+end
+
+procedure DoSwap(
+  pool : Pool,
+  token_address : ByStr20,
+  input : Coins,
+  output : Coins,
+  input_from : ByStr20,
+  output_to : ByStr20
+)
+
+  match pool with
+  | Pool x y => (* grph reserve, token reserve *)
+    (* update new pool balances *)
+    match input with
+    | Coins input_denom input_amount =>
+      match output with
+      | Coins output_denom output_amount =>
+        UpdateTotalInput input_denom input_amount;
+        UpdateTotalOutput output_denom output_amount;
+        match input_denom with
+        | Zil =>
+          new_pool =
+            let new_x = builtin sub x output_amount in
+            let new_y = builtin add y input_amount in
+          Pool new_x new_y;
+          pools[empty_address] := new_pool
+        | Grph =>
+          new_pool =
+            let new_x = builtin add x input_amount in
+            let new_y = builtin sub y output_amount in
+          Pool new_x new_y;
+          pools[token_address] := new_pool
+        | Token _ =>
+          new_pool =
+            let new_x = builtin sub x output_amount in
+            let new_y = builtin add y input_amount in
+          Pool new_x new_y;
+          pools[token_address] := new_pool
+        end
+      end
+    end;
+
+    (* do receive / send *)
+    sending_from_self = builtin eq input_from _this_address;
+    match sending_from_self with
+    | True => (* don't do anything on internal send *)
+    | False => Receive input (* accept the expected input *)
+    end;
+
+    sending_to_self = builtin eq output_to _this_address;
+    match sending_to_self with
+    | True => (* don't do anything on internal receive *)
+    | False => Send output output_to (* send the expected output *)
+    end;
+
+    (* emit swap event *)
+    e = {
+      _eventname: "Swapped";
+      pool: token_address; address: _sender;
+      input: input; output: output
+    };
+    event e
+
+  end
+end
+
+procedure DoSwapTwice(
+  pool0 : Pool,
+  token0_address : ByStr20,
+  pool1 : Pool,
+  token1_address : ByStr20,
+  input_amount : Uint128,
+  intermediate_amount : Uint128,
+  output_amount : Uint128,
+  recipient_address : ByStr20
+)
+  input =
+    let is_zil = builtin eq token0_address empty_address in
+    let token0 = match is_zil with | True => Zil | False => Token token0_address end in
+    Coins token0 input_amount;
+
+  intermediate = Coins grph intermediate_amount;
+
+  output =
+    let is_zil = builtin eq token1_address empty_address in
+    let token1 = match is_zil with | True => Zil | False => Token token1_address end in
+    Coins token1 output_amount;
+
+  DoSwap
+    pool0
+    token0_address
+    input
+    intermediate
+    _sender
+    _this_address;
+  DoSwap
+    pool1
+    token1_address
+    intermediate
+    output
+    _this_address
+    recipient_address
+end
+
+
+procedure PaySwapFee(grph_fee: Uint128)
+
+  old_fees_balance <- swap_fees_balance;
+  new_fees_balance = builtin add old_fees_balance grph_fee;
+  swap_fees_balance := new_fees_balance;
+
+  r_balance <- grph_balances[_sender];
+  account_balance = match r_balance with | Some value => value | None => zero end;
+  is_transfer = builtin lt account_balance grph_fee;
+
+  match is_transfer with
+    | True =>
+      swap_fees_msg = {_tag : "TransferFrom"; _recipient: grph_address; _amount: zero; from: _sender; to: _this_address; amount: grph_fee};
+      msgs = oneMsg swap_fees_msg;
+      send msgs
+    | False =>
+      new_account_balance = builtin sub account_balance grph_fee;
+      grph_balances[_sender] := new_account_balance
+  end
+end
+
+procedure UpdateTotalUsedSwapFees(token_address : ByStr20, direction: SwapDirection, swap_fee: Uint128)
+  match direction with
+    | GrphToToken =>
+        op_total_fees_used <- total_fees_used[grph_address][token_address];
+        new_total_fees_used = match op_total_fees_used with | Some value => builtin add swap_fee value | None => swap_fee end;
+        total_fees_used[grph_address][token_address] := new_total_fees_used
+    | TokenToGrph =>
+        op_total_fees_used <- total_fees_used[token_address][grph_address];
+        new_total_fees_used = match op_total_fees_used with | Some value => builtin add swap_fee value | None => swap_fee end;
+        total_fees_used[token_address][grph_address] := new_total_fees_used
+  end
+end
+
+procedure SwapUsingGrph(
+  token_address : ByStr20,
+  direction : SwapDirection,
+  exact_side : ExactSide,
+  exact_amount : Uint128,
+  limit_amount : Uint128,
+  deadline_block : BNum,
+  recipient_address : ByStr20,
+  noSwapFee: Bool
+)
+  ThrowIfExpired deadline_block;
+  ThrowIfZero exact_amount;
+  ThrowIfZero limit_amount;
+
+  after_fee <- output_after_fee;
+  maybe_pool <- pools[token_address];
+
+  is_zil = builtin eq token_address empty_address;
+
+  afterSwap =
+     let option_limit_amount = Some {Uint128} limit_amount in
+     let swap = Swap maybe_pool direction exact_side exact_amount option_limit_amount after_fee in
+     resultFor swap;
+
+  match maybe_pool with
+    | Some pool =>
+          match afterSwap with
+             | AfterSwap swap_fee result =>
+                match result with
+                  | Error msg =>
+                    e = { _exception : msg };
+                    throw e
+                  | Result calculated_amount =>
+                    match noSwapFee with
+                      | True => (*no rewards*)
+                      | False =>
+                        PaySwapFee swap_fee;
+                        UpdateTotalUsedSwapFees token_address direction swap_fee
+                    end;
+                    token = match is_zil with | True => Zil | False => Token token_address end;
+                    match exact_side with
+                    | ExactInput =>
+                      match direction with
+                      | GrphToToken =>
+                        input = Coins grph exact_amount;
+                        output = Coins token calculated_amount;
+                        DoSwap pool token_address input output _sender recipient_address
+                      | TokenToGrph =>
+                        match is_zil with | True => ThrowIfZero _amount | False => (*ok*) end;
+                        grph_token = Token grph_address;
+                        input = Coins token exact_amount;
+                        output = Coins grph_token calculated_amount;
+                        DoSwap pool token_address input output _sender recipient_address
+                      end
+                    | ExactOutput =>
+                      match direction with
+                      | GrphToToken =>
+                        input = Coins grph calculated_amount;
+                        output = Coins token exact_amount;
+                        DoSwap pool token_address input output _sender recipient_address
+                      | TokenToGrph =>
+                        match is_zil with | True => ThrowIfZero _amount | False => (*ok*) end;
+                        input = Coins token calculated_amount;
+                        output = Coins grph exact_amount;
+                        DoSwap pool token_address input output _sender recipient_address
+                      end
+                    end
+                end
+          end
+    | None => (* nothing *)
+  end
+end
+
+procedure IsAllowedShare(account: ByStr20, token_address: ByStr20, amount: Uint128)
+  op_balance <- balances[token_address][account];
+  balance = match op_balance with | Some value => value | None => Uint128 0 end;
+  is_valid_amount = uint128_ge balance amount;
+  match is_valid_amount with
+    | True => (*ok*)
+    | False =>
+      e = { _exception : "Not allowed share amount" };
+      throw e
+  end
+end
+
+procedure IsPoolExists(token_address: ByStr20)
+  maybe_total_contribution <- total_contributions[token_address];
+  maybe_pool <- pools[token_address];
+  match maybe_total_contribution with
+    | Some _ =>
+      match maybe_pool with
+        | Some _ => (*ok*)
+        | None =>
+          e = { _exception : "MissingPool" };
+          throw e
+      end
+    | None =>
+      e = { _exception : "MissingPool" };
+      throw e
+  end
+end
+
+procedure IsRatesFulfilled(grph_amount: Uint128, min_grph_amount: Uint128, token_amount: Uint128, min_token_amount: Uint128)
+  within_limits =
+        let carb_ok = uint128_ge grph_amount min_grph_amount in
+        let token_ok = uint128_ge token_amount min_token_amount in
+        andb carb_ok token_ok;
+  match within_limits with
+    | True => (*ok*)
+    | False =>
+      e = { _exception : "RequestedRatesCannotBeFulfilled" };
+      throw e
+  end
+end
+
+procedure SendMsgToStakeProxy(tag: String, pool: ByStr20, account: ByStr20, amount: Uint128, total_contribution: Uint128)
+    r_proxy <- stake_proxy;
+    stakeMsg = {
+      _tag: tag;
+      _recipient: r_proxy;
+      _amount: zero;
+      pool: pool;
+      account: account;
+      amount: amount;
+      total_contribution: total_contribution
+    };
+    sendStakeMsg = oneMsg stakeMsg;
+    send sendStakeMsg
+end
+
+procedure CreateNewPool(grph_amount: Uint128, max_token_amount: Uint128, token_address: ByStr20)
+
+    create_min_grph <- min_grph;
+
+    is_valid_grph_amount = uint128_ge grph_amount create_min_grph;
+    match is_valid_grph_amount with
+      | True => (*ok*)
+      | False =>
+        e = { _exception : "InvalidMinGrphAmount" };
+        throw e
+    end;
+
+    is_zil = builtin eq token_address empty_address;
+    match is_zil with
+      | True => ThrowIfZero _amount
+      | False => (*ok*)
+    end;
+    denom = match is_zil with | True => Zil | False => Token token_address end;
+
+    tokens_in = Coins denom max_token_amount;
+    Receive tokens_in;
+
+    new_pool = Pool grph_amount max_token_amount;
+    pools[token_address] := new_pool;
+
+    balances[token_address][_sender] := grph_amount;
+    total_contributions[token_address] := grph_amount;
+
+    e2 = {
+        _eventname: "Mint";
+        pool: token_address;
+        address: _sender;
+        amount: max_token_amount;
+        grph_amount: grph_amount;
+        total_contribution: grph_amount
+    };
+    event e2;
+    tag = "Stake";
+    SendMsgToStakeProxy tag token_address _sender grph_amount grph_amount
+end
+
+procedure IsSomeAmountResult(op_amount: Option Uint128)
+  match op_amount with
+    | Some _ => (*ok*)
+    | None =>
+      e = { _exception : "IntegerOverflow" };
+      throw e
+  end
+end
+
+procedure UpdatePool(pool: Pool, grph_amount: Uint128, min_contribution_amount: Uint128, max_token_amount: Uint128, token_address: ByStr20)
+
+  is_zil = builtin eq token_address empty_address;
+  match is_zil with
+    | True => ThrowIfZero _amount
+    | False => (*ok*)
+  end;
+  token = match is_zil with | True => Zil | False => Token token_address end;
+
+  match pool with
+    | Pool x y =>
+      (* carb reserve, token reserve *)
+      (* dY = dX * Y / X + 1 *)
+      (* dX is always the QA transferred *)
+      maybe_result = frac grph_amount x y;
+      IsSomeAmountResult maybe_result;
+      result = match maybe_result with | Some value => value | None => Uint128 0 end;
+
+      delta_y = result;
+      maybe_total_contribution <- total_contributions[token_address];
+      IsSomeAmountResult maybe_total_contribution;
+      total_contribution = match maybe_total_contribution with | Some value => value | None => Uint128 0 end;
+
+      maybe_new_contribution = frac grph_amount x total_contribution;
+      IsSomeAmountResult maybe_new_contribution;
+      new_contribution = match maybe_new_contribution with | Some value => value | None => Uint128 0 end;
+
+      within_limits =
+        let token_lte_max = uint128_le delta_y max_token_amount in
+        let contribution_gte_max = uint128_ge new_contribution min_contribution_amount in
+        andb token_lte_max contribution_gte_max;
+
+      match within_limits with
+        | False =>
+          e = { _exception : "RequestedRatesCannotBeFulfilled" ; delta_y: delta_y };
+          throw e
+        | True =>
+          tokens_in = Coins token delta_y;
+          Receive tokens_in;
+
+          new_pool =
+            let new_x = builtin add x grph_amount in
+            let new_y = builtin add y delta_y in
+          Pool new_x new_y;
+          pools[token_address] := new_pool;
+          existing_balance <- balances[token_address][_sender];
+          new_balance = match existing_balance with | Some b => builtin add b new_contribution | None => new_contribution end;
+          balances[token_address][_sender] := new_balance;
+          new_total_contribution = builtin add total_contribution new_contribution;
+          total_contributions[token_address] := new_total_contribution;
+
+          e = {
+            _eventname: "Mint";
+            pool: token_address;
+            address: _sender;
+            amount: delta_y;
+            grph_amount: new_balance;
+            total_contribution: new_total_contribution
+          };
+          event e;
+          r_proxy <- stake_proxy;
+          tag = "Stake";
+          SendMsgToStakeProxy tag token_address _sender new_balance new_total_contribution
+      end
+  end
+end
+
+procedure ThrowIfNotValidTokens(token0_address: ByStr20, token1_address: ByStr20)
+    is_same = builtin eq token0_address token1_address;
+    match is_same with
+      | True =>
+        e = { _exception : "NotValidTokenPair" };
+        throw e
+      | False => (*ok*)
+    end
+end
+
+
+(* public functions *)
+
+(* Management *)
+
+transition SetProxyContract(proxy: ByStr20)
+   ThrowUnlessSenderIsOwner;
+   stake_proxy := proxy
+end
+
+transition SetAdmin(account: ByStr20)
+  ThrowUnlessSenderIsOwner;
+  admin := account
+end
+
+transition Pause()
+  ThrowUnlessSenderIsAdmin _sender;
+  is_paused := true
+end
+
+transition Unpause()
+  ThrowUnlessSenderIsAdmin _sender;
+  is_paused := false
+end
+
+transition AddToWhitelistRemoveLiquidity(account: ByStr20)
+  ThrowUnlessSenderIsAdmin _sender;
+  can_remove_liquidity[account] := true
+end
+
+transition RemoveWhitelistRemoveLiquidity(account: ByStr20)
+  ThrowUnlessSenderIsAdmin _sender;
+  delete can_remove_liquidity[account]
+end
+
+transition SetMinGrph(amount: Uint128)
+  ThrowUnlessSenderIsAdmin _sender;
+  min_grph := amount
+end
+
+transition RecipientAcceptTransfer(sender: ByStr20, recipient: ByStr20, amount: Uint128)
+  is_sender_contract = builtin eq sender _this_address;
+  match is_sender_contract with
+    | False =>
+      is_grph_address = builtin eq _sender grph_address;
+      match is_grph_address with
+        | True =>
+          op_balance <- grph_balances[sender];
+          new_grph_balance = match  op_balance with | Some value => builtin add value amount | None => amount end;
+          grph_balances[sender] := new_grph_balance;
+          e = {_eventname: "AddGrphForFees"; amount: amount; account: sender};
+          event e
+        | False =>
+          e = { _exception : "InvalidTransferInvocation" };
+          throw e
+      end
+    | True => (*ok*)
+  end
+end
+
+transition RecipientAcceptTransferFrom(
+  initiator : ByStr20,
+  sender : ByStr20,
+  recipient : ByStr20,
+  amount : Uint128
+)
+
+  is_valid_transfer_to_self =
+    let self_triggered = builtin eq initiator _this_address in
+    let is_transfer_to_self = builtin eq recipient _this_address in
+    andb self_triggered is_transfer_to_self;
+
+  match is_valid_transfer_to_self with
+  | False =>
+    e = { _exception : "InvalidInvocation" };
+    throw e
+  | True => (* noop *)
+  end
+end
+
+
+
+transition WithdrawGrph()
+  op_balance <- grph_balances[_sender];
+  amount = match op_balance with | Some value => value | None => Uint128 0 end;
+  delete grph_balances[_sender];
+  transfer_msg = {_tag : "Transfer"; _recipient: grph_address; _amount: zero; to: _sender; amount: amount};
+  msgs = oneMsg transfer_msg;
+  send msgs
+end
+
+
+transition TransferOwnership(new_owner : ByStr20)
+  ThrowUnlessSenderIsOwner;
+  existing_owner <- owner;
+  new_owner_is_existing_owner = builtin eq new_owner existing_owner;
+  match new_owner_is_existing_owner with
+  | True =>
+    e = { _exception : "InvalidParameter" };
+    throw e
+  | False =>
+    pending_owner := new_owner
+  end
+end
+
+transition AcceptPendingOwnership()
+  new_owner <- pending_owner;
+  old_owner <- owner;
+  sender_is_pending_owner = builtin eq _sender new_owner;
+  match sender_is_pending_owner with
+  | False =>
+    e = { _exception : "InvalidSender" };
+    throw e
+  | True =>
+    owner := new_owner;
+    pending_owner := empty_address;
+    e = { _eventname: "OwnershipTransferred"; owner: new_owner };
+    event e
+  end
+end
+
+(* 0.25 => new_fee 25 *)
+transition SetFee(new_fee : Uint256)
+  ThrowUnlessSenderIsAdmin _sender;
+  is_valid_fee = uint256_le new_fee fee_denom;
+  match is_valid_fee with
+  | False =>
+    e = { _exception : "InvalidFeeParameter" };
+    throw e
+  | True =>
+    new_output_after_fee = new_fee;
+    output_after_fee := new_output_after_fee;
+    e = { _eventname: "FeeSet"; fee: new_fee };
+    event e
+  end
+end
+
+transition SetTokenToWhiteList(token: ByStr20)
+    ThrowUnlessSenderIsAdmin _sender;
+    whitelisted_token[token] := true
+end
+
+transition BurnSwapFees()
+    ThrowUnlessSenderIsAdmin _sender;
+
+    old_swap_fees_balance <- swap_fees_balance;
+    old_total_burnt_fees <- total_burnt_fees;
+
+    swap_fees_balance := zero;
+    new_total_burnt_fees = builtin add old_total_burnt_fees old_swap_fees_balance;
+    total_burnt_fees := new_total_burnt_fees;
+
+    is_gt_zero = uint128_gt old_swap_fees_balance zero;
+
+    match is_gt_zero with
+      | True =>
+        msg = {
+          _tag: "Burn";
+          _recipient: grph_address;
+          _amount: zero;
+          amount: old_swap_fees_balance
+        };
+        sendBurnMsg = oneMsg msg;
+        send sendBurnMsg
+      | False =>
+        e = { _exception : "NoSwapFeesFound" };
+        throw e
+    end
+end
+
+(* Pools functions *)
+
+transition AddLiquidity(
+  grph_amount: Uint128,
+  token_address : ByStr20,
+  min_contribution_amount : Uint128,
+  max_token_amount : Uint128,
+  deadline_block : BNum
+)
+  IsPaused;
+  IsWhiteListedToken token_address;
+  ThrowUnlessIsNotBlacklist token_address;
+  ThrowIfExpired deadline_block;
+  ThrowIfGrph token_address;
+  ThrowIfZero max_token_amount;
+
+  grph_token = Token grph_address;
+  (* accept all carb *)
+  grph_in = Coins grph_token grph_amount;
+  Receive grph_in;
+
+  maybe_pool <- pools[token_address];
+  match maybe_pool with
+    | None => CreateNewPool grph_amount max_token_amount token_address
+    | Some pool => UpdatePool pool grph_amount min_contribution_amount max_token_amount token_address
+  end
+end
+
+transition RemoveLiquidity(
+  token_address : ByStr20,
+  contribution_amount : Uint128,
+  min_grph_amount : Uint128,
+  min_token_amount : Uint128,
+  deadline_block : BNum
+)
+  IsPaused;
+  ThrowIfExpired deadline_block;
+  ThrowIfZero contribution_amount;
+  ThrowIfZero min_grph_amount;
+  ThrowIfZero min_token_amount;
+  ThrowIfGrph token_address;
+  IsAllowedShare _sender token_address contribution_amount;
+
+  is_zil = builtin eq token_address empty_address;
+  token = match is_zil with | True => Zil | False => Token token_address end;
+
+  maybe_total_contribution <- total_contributions[token_address];
+  maybe_pool <- pools[token_address];
+
+  IsPoolExists token_address;
+
+  total_contribution = match maybe_total_contribution with | Some value => value | None => Uint128 0 end;
+  pool = match maybe_pool with | Some value => value | None => emptyPool end;
+
+  ThrowIfZero total_contribution;
+
+  match pool with
+    | Pool x y =>
+      maybe_grph_amount = frac contribution_amount total_contribution x;
+      maybe_token_amount = frac contribution_amount total_contribution y;
+      grph_amount = match maybe_grph_amount with | Some value => value | None =>  Uint128 0 end;
+      token_amount = match maybe_token_amount with | Some value => value | None =>  Uint128 0 end;
+      ThrowIfZero grph_amount;
+      ThrowIfZero token_amount;
+      IsRatesFulfilled grph_amount min_grph_amount token_amount min_token_amount;
+
+      new_x = builtin sub x grph_amount;
+      new_y = builtin sub y token_amount;
+      new_pool = Pool new_x new_y;
+
+      is_pool_now_empty = poolEmpty new_pool;
+      op_balance <- balances[token_address][_sender];
+
+      match op_balance with
+        | Some balance =>
+          new_balance = builtin sub balance contribution_amount;
+          match is_pool_now_empty with
+            | True =>
+              (* clear pool entries when there is no more liquidity *)
+              delete pools[token_address];
+              delete balances[token_address];
+              delete total_contributions[token_address]
+            | False =>
+              pools[token_address] := new_pool;
+              balances[token_address][_sender] := new_balance;
+              new_total_contribution = builtin sub total_contribution contribution_amount;
+              total_contributions[token_address] := new_total_contribution;
+              zero = Uint128 0;
+              is_balance_zero = builtin eq new_balance zero
+          end;
+            grph_token = Token grph_address;
+            carb_out = Coins grph_token grph_amount;
+            tokens_out = Coins token token_amount;
+            Send carb_out _sender;
+            Send tokens_out _sender;
+
+            op_new_total_contributions <- total_contributions[token_address];
+            new_total_contributions = match op_new_total_contributions with | Some value => value | None => Uint128 0 end;
+
+            e = { _eventname: "Burnt";
+                  pool: token_address;
+                  address: _sender; amount: tokens_out;
+                  grph_amount: new_balance;
+                  total_contributions: new_total_contributions
+            };
+            event e;
+            tag = "Withdraw";
+            SendMsgToStakeProxy tag token_address _sender new_balance new_total_contributions
+      | None =>
+        e = { _exception : "MissingBalance" };
+        throw e
+    end
+  end
+end
+
+(* Swap functions *)
+
+transition SwapExactGrphForTokens(
+  amount: Uint128,
+  token_address : ByStr20,
+  min_token_amount : Uint128,
+  deadline_block : BNum,
+  recipient_address : ByStr20
+)
+  IsPaused;
+  ThrowUnlessIsNotBlacklist token_address;
+  ThrowIfGrph token_address;
+  direction = GrphToToken;
+  exact_side = ExactInput;
+  exact_amount = amount;
+  limit_amount = min_token_amount;
+  noSwapFee = False;
+
+  SwapUsingGrph
+    token_address
+    direction
+    exact_side
+    exact_amount
+    limit_amount
+    deadline_block
+    recipient_address
+    noSwapFee
+end
+
+transition SwapExactTokensForGrph(
+  token_address : ByStr20,
+  token_amount : Uint128,
+  min_grph_amount : Uint128,
+  deadline_block : BNum,
+  recipient_address : ByStr20
+)
+  IsPaused;
+  ThrowUnlessIsNotBlacklist token_address;
+  ThrowIfGrph token_address;
+  direction = TokenToGrph;
+  exact_side = ExactInput;
+  exact_amount = token_amount;
+  limit_amount = min_grph_amount;
+  noSwapFee = builtin eq token_address empty_address;
+
+  SwapUsingGrph
+    token_address
+    direction
+    exact_side
+    exact_amount
+    limit_amount
+    deadline_block
+    recipient_address
+    noSwapFee
+end
+
+transition SwapExactTokensForTokens(
+  token0_address : ByStr20,
+  token1_address : ByStr20,
+  token0_amount : Uint128, (* the token0 amount to be sent in *)
+  min_token1_amount : Uint128, (* min token0 amount that must be received for the txn to not revert *)
+  deadline_block : BNum,
+  recipient_address : ByStr20
+)
+  IsPaused;
+  ThrowUnlessIsNotBlacklist token0_address;
+  ThrowUnlessIsNotBlacklist token1_address;
+  ThrowIfGrph token0_address;
+  ThrowIfGrph token1_address;
+  ThrowIfNotValidTokens token0_address token1_address;
+  ThrowIfExpired deadline_block;
+  ThrowIfZero token0_amount;
+  ThrowIfZero min_token1_amount;
+
+  after_fee <- output_after_fee;
+  maybe_pool0 <- pools[token0_address];
+  maybe_pool1 <- pools[token1_address];
+
+  afterSwap0 =
+    let direction = TokenToGrph in
+    let exact_side = ExactInput in
+    let limit_amount = None {Uint128} in
+    let swap = Swap maybe_pool0 direction exact_side token0_amount limit_amount after_fee in
+        resultFor swap;
+
+  match maybe_pool0 with
+    | Some pool0 => match maybe_pool1 with
+      | Some pool1 =>
+        match afterSwap0 with
+        | AfterSwap swap_fee0 result0 =>
+          match result0 with
+            | Error msg =>
+              e = { _exception : msg };
+              throw e
+            | Result grph_intermediate_amount =>
+              PaySwapFee swap_fee0;
+
+              op_total_fees_used <- total_fees_used[token0_address][token1_address];
+              new_total_fees_used = match op_total_fees_used with | Some value => builtin add swap_fee0 value | None => swap_fee0 end;
+              total_fees_used[token0_address][token1_address] := new_total_fees_used;
+
+            afterSwap1 =
+              let direction = GrphToToken in
+              let exact_side = ExactInput in
+              let limit_amount = Some {Uint128} min_token1_amount in
+              let swap = Swap maybe_pool1 direction exact_side grph_intermediate_amount limit_amount after_fee in
+                resultFor swap;
+              match afterSwap1 with
+              | AfterSwap _ result1 =>
+                match result1 with
+                  | Error msg =>
+                    e = { _exception : msg };
+                    throw e
+                  | Result output_amount =>
+                    DoSwapTwice
+                      pool0
+                      token0_address
+                      pool1
+                      token1_address
+                      token0_amount
+                      grph_intermediate_amount
+                      output_amount
+                      recipient_address
+                end
+              end
+          end
+        end
+      | None =>
+        msg = "NoPoolFound";
+        e = { _exception : msg };
+        throw e
+      end
+    | None =>
+        msg = "NoPoolFound";
+        e = { _exception : msg };
+        throw e
+  end
+end
+
+(* callback functions *)
+
+transition TransferFromSuccessCallBack(initiator: ByStr20, sender: ByStr20, recipient: ByStr20, amount: Uint128)
+end
+
+transition TransferSuccessCallBack(sender :ByStr20, recipient :ByStr20, amount: Uint128)
+end
