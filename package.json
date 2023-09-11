@@ -6,7 +6,8 @@
     "scilla:deploy:test:step1": "node scilla/deployment/test/step_1/deploySwapContract.js",
     "scilla:deploy:test:step2": "node scilla/deployment/test/step_2/setRewardsToken.js",
     "scilla:deploy:test:step3": "node scilla/deployment/test/step_3/setTokenToWhitelist.js",
-    "scilla:deploy:test:step4": "node scilla/deployment/test/step_4/createPools.js"
+    "scilla:deploy:test:step4": "node scilla/deployment/test/step_4/createPools.js",
+    "scilla:deploy:test:step5": "node scilla/deployment/test/step_5/deployGrphStakeContract.js"
   },
   "author": "Anas Saber <anastal2001@yahoo.com>",
   "license": "ISC",
