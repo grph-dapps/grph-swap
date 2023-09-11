@@ -142,7 +142,7 @@ procedure CheckRequiredBalance(balance: Uint128)
   end
 end
 
-procedure DoUpdateRewards()
+procedure DoUpdateRewards(account: ByStr20)
   r_totalSupply <- totalSupply;
   r_rewardRate <- rewardRate;
 
@@ -168,7 +168,7 @@ procedure DoUpdateRewards()
   end;
 
 
-  isContract = builtin eq _this_address _sender;
+  isContract = builtin eq _this_address account;
 
   match isContract with
     | True => (* nothing to do*)
@@ -176,9 +176,9 @@ procedure DoUpdateRewards()
       rewardPerTokenStored := newRewardPerTokenStored;
       lastUpdatedBlock := currentBlock;
 
-      op_balance <- balances[_sender];
-      op_reward <- rewards[_sender];
-      op_paid <- userRewardsPerTokenPaid[_sender];
+      op_balance <- balances[account];
+      op_reward <- rewards[account];
+      op_paid <- userRewardsPerTokenPaid[account];
 
       r_balance = match op_balance with | Some value => value | None => zeroUint128 end;
       r_paid = match op_paid with | Some value => value | None => zeroUint128 end;
@@ -190,33 +190,36 @@ procedure DoUpdateRewards()
       divTokenMultiplier = builtin div balanceMulDiff token_multiplier;
       sumRewardsAsRewardToken = builtin add divTokenMultiplier r_reward;
 
-      rewards[_sender] := sumRewardsAsRewardToken;
-      userRewardsPerTokenPaid[_sender] := newRewardPerTokenStored
+      rewards[account] := sumRewardsAsRewardToken;
+      userRewardsPerTokenPaid[account] := newRewardPerTokenStored
   end
 end
 
-procedure UpdateRewards()
+procedure UpdateRewards(account: ByStr20)
   r_is_closed <- is_closed;
   match r_is_closed with
     | True =>
-      r_claimed_account <- claimedAfterClose[_sender];
+      r_claimed_account <- claimedAfterClose[account];
       is_claimed = match r_claimed_account with | Some value => value | None => false end;
       match is_claimed with
         | True => (* nothing *)
         | False =>
-          claimedAfterClose[_sender] := true;
-          DoUpdateRewards
+          claimedAfterClose[account] := true;
+          DoUpdateRewards account
       end
-    | False => DoUpdateRewards
+    | False => DoUpdateRewards account
   end
 end
 
-procedure AddStake(amount: Uint128)
-    UpdateRewards;
-    op_balance <- balances[_sender];
+procedure AddStake(account: ByStr20, amount: Uint128)
+    UpdateRewards account;
+    op_balance <- balances[account];
     newBalance = match op_balance with | Some value => builtin add value amount | None => amount end;
     CheckRequiredBalance newBalance;
-    balances[_sender] := newBalance
+    balances[account] := newBalance;
+    r_totalSupply <- totalSupply;
+    newTotalSupply = builtin add r_totalSupply amount;
+    totalSupply := newTotalSupply
 end
 
 
@@ -236,7 +239,7 @@ procedure Send(amount: Uint128)
 end
 
 procedure RemoveStake(amount: Uint128)
-    UpdateRewards;
+    UpdateRewards _sender;
     op_balance <- balances[_sender];
     match op_balance with
         | Some value =>
@@ -284,7 +287,7 @@ transition Withdraw(amount: Uint128)
 end
 
 transition Claim()
-  UpdateRewards;
+  UpdateRewards _sender;
   r_reward <- rewards[_sender];
   match r_reward with
     | Some reward =>
@@ -332,7 +335,7 @@ transition RecipientAcceptTransfer(sender: ByStr20, recipient: ByStr20, amount: 
     OnlyStakeToken;
     is_me = builtin eq recipient _this_address;
     match is_me with
-     | True => AddStake amount
+     | True => AddStake sender amount
      | False =>
        errorMsg = "NotValidRecipient";
        ThrowError errorMsg
