@@ -228,8 +228,8 @@ transition Reward(account: ByStr20, balance: Uint128, totalSupply: Uint128, rewa
         match isGreaterZero with
           | True =>
             match is_mint with
-             | True => MintToken _sender reward
-             | False => match is_zil with | True => TransferZil _sender reward | False => TransferToken _sender reward end
+             | True => MintToken account reward
+             | False => match is_zil with | True => TransferZil account reward | False => TransferToken account reward end
             end
           | False => (* nothing *)
         end
