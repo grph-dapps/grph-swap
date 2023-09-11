@@ -12,5 +12,5 @@ module.exports = {
     swapAddress: '0xf855a227d3628e6cd614fe1e7fdab46b6d3b9551',
     swapStakeProxyAddress: '0x0e0eeb3ca0d9c973048fdd4683635db37fe71351',
     swapGrphRewardsStakeAddress: '0x3e16d44b28460ea4444e07c03189459843517d8a',
-    grphStakeAddress: '',
+    grphStakeAddress: '0x72e2ca8ab31d156c2b654c267b92be43edab072f',
 };
