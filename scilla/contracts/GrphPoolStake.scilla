@@ -171,10 +171,7 @@ procedure DoUpdateRewards(account: ByStr20, balance: Uint128, totalSupply: Uint1
       diffRewardsPerToken = builtin sub newRewardPerTokenStored r_paid;
       balanceMulDiff = builtin mul diffRewardsPerToken balance;
       divTokenMultiplier = builtin div balanceMulDiff token_multiplier;
-      (* workaround *)
-      multiplier = Uint128 1000;
-      r_divTokenMultiplier = builtin mul divTokenMultiplier multiplier;
-      sumRewardsAsRewardToken = builtin add r_divTokenMultiplier r_reward;
+      sumRewardsAsRewardToken = builtin add divTokenMultiplier r_reward;
 
       rewards[account] := sumRewardsAsRewardToken;
       userRewardsPerTokenPaid[account] := newRewardPerTokenStored
