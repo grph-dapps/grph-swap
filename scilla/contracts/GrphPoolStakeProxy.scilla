@@ -171,7 +171,14 @@ end
 
 transition SetRewardsToken(pool: ByStr20, stake_contract: ByStr20, reward_token: ByStr20, token_owner: ByStr20, reward_rate: Uint128)
   OnlyOwner _sender;
-  AddNewStakeContract pool stake_contract reward_token token_owner reward_rate
+  AddNewStakeContract pool stake_contract reward_token token_owner reward_rate;
+  msg = {
+    _tag: "Init";
+    _recipient: stake_contract;
+    _amount: zeroUint128;
+  };
+  sendInitMsg = one_msg msg;
+  send sendInitMsg
 end
 
 transition RemoveStakeContract(pool: ByStr20, stake_contract: ByStr20)
@@ -188,7 +195,7 @@ transition RemoveStakeContract(pool: ByStr20, stake_contract: ByStr20)
     send sendCloseRewardsMsg
 end
 
-transition PenndingStakeContract(stake_owner: ByStr20, stake_contract: ByStr20)
+transition PendingStakeContract(stake_owner: ByStr20, stake_contract: ByStr20)
   OnlyOwner _sender;
   pending_stake_contracts[stake_owner] := stake_contract
 end

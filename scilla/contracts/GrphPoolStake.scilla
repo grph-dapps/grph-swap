@@ -103,6 +103,22 @@ procedure OnlyProxy(account: ByStr20)
   end
 end
 
+procedure OnlyProxyOrOwner(account: ByStr20)
+   isProxy = builtin eq account proxy;
+   match isProxy with
+     | True => (* ok *)
+     | False =>
+        r_owner <- owner;
+        isOwner = builtin eq account r_owner;
+        match isOwner with
+          | True => (* ok *)
+          | False =>
+            msg = "NotProxyOrOwner";
+            ThrowError msg
+        end
+   end
+end
+
 procedure MintToken(to: ByStr20, amount: Uint128)
   e = { _eventname: "RewardClaimed" };
   event e;
@@ -203,6 +219,13 @@ procedure RemoveStake(account: ByStr20, balance: Uint128, totalSupply: Uint128, 
 end
 
 (* public functions *)
+
+transition Init()
+   OnlyProxyOrOwner _sender;
+   blk <- & BLOCKNUMBER;
+   currentBlock =  blockToUint128 blk;
+   lastUpdatedBlock := currentBlock
+end
 
 transition Add(account: ByStr20, balance: Uint128, totalSupply: Uint128, rewardRate: Uint128)
   OnlyProxy _sender;
