@@ -223,7 +223,7 @@ end
 transition Init()
    OnlyProxyOrOwner _sender;
    blk <- & BLOCKNUMBER;
-   currentBlock =  blockToUint128 blk;
+   currentBlock = blockToUint128 blk;
    lastUpdatedBlock := currentBlock
 end
 

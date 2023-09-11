@@ -175,7 +175,7 @@ transition SetRewardsToken(pool: ByStr20, stake_contract: ByStr20, reward_token:
   msg = {
     _tag: "Init";
     _recipient: stake_contract;
-    _amount: zeroUint128;
+    _amount: zeroUint128
   };
   sendInitMsg = one_msg msg;
   send sendInitMsg

@@ -49,7 +49,36 @@ function contract({privateKey, api, version, net, contractAddress}) {
             throw new Error("something went wrong by contract deployment with txId: 0x" + deployTx.id);
         }
     },
-    async Add(account, balance, totalSupply, rewardRate, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
+    async Init(gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
+        const args = arguments;
+        const e = new Error();
+        const frame = e.stack.split("\n")[1];
+        const tag = frame.split(" ")[5].split(".")[1];
+        const params = [].map((param, index) => {
+            if (typeof args[index] === "object") {
+                param.value = args[index];
+            } else {
+                param.value = typeof args[index] === "boolean" ? {constructor: args[index] ? "True" : "False", argtypes: [], arguments: []} : args[index].toString();
+            }
+            param.type = param.type.split("with")[0].trim();
+            return param;
+        });
+        const callTx = await zilliqa.contracts.at(myAddress).callWithoutConfirm(tag, params, {
+            version,
+            amount: new BN(zilAmount),
+            gasPrice: units.toQa(gasPrice.toString(), units.Units.Li),
+            gasLimit: Long.fromNumber(gasLimit),
+        });
+        
+        if(callback) {
+            callback("0x" + callTx.id);
+        }
+        const confirmedTxn = await callTx.confirm(callTx.id);
+        if (!confirmedTxn.receipt.success) {
+            console.log(JSON.stringify(confirmedTxn, null, 2));
+        }
+        return confirmedTxn.receipt.success === true;
+    },async Add(account, balance, totalSupply, rewardRate, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
         const args = arguments;
         const e = new Error();
         const frame = e.stack.split("\n")[1];

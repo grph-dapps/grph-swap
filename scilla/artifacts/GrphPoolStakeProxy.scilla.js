@@ -107,7 +107,7 @@ function contract({privateKey, api, version, net, contractAddress}) {
             console.log(JSON.stringify(confirmedTxn, null, 2));
         }
         return confirmedTxn.receipt.success === true;
-    },async PenndingStakeContract(stake_owner, stake_contract, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
+    },async PendingStakeContract(stake_owner, stake_contract, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
         const args = arguments;
         const e = new Error();
         const frame = e.stack.split("\n")[1];
