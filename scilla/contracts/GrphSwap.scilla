@@ -38,6 +38,13 @@ let twoMsgs =
     let msgs_tmp = oneMsg msg2 in
     Cons {Message} msg1 msgs_tmp
 
+let blockToUint128: BNum -> Uint128 =
+  fun(block: BNum) =>
+    let zeroBlock = BNum 0 in
+    let initBlock = builtin bsub block zeroBlock in
+    let op_uint128 = builtin to_uint128 initBlock in
+    match op_uint128 with | Some value => value | None => Uint128 0 end
+
 let grow : Uint128 -> Uint256 =
   fun (var : Uint128) =>
     let maybe_big = builtin to_uint256 var in
@@ -255,6 +262,11 @@ field zil_address: ByStr20 = empty_address
 
 field is_paused: Bool = true
 
+field ssl_pools: Map ByStr20 Bool = Emp ByStr20 Bool
+field ssl_balances: Map ByStr20 (Map ByStr20 Uint128) = Emp ByStr20 (Map ByStr20 Uint128)
+field ssl_times: Map ByStr20 (Map ByStr20 Uint128) = Emp ByStr20 (Map ByStr20 Uint128)
+field grph_buffer: Uint128 = Uint128 0
+
 
 (* statics *)
 field total_input: Map ByStr20 Uint128 = Emp ByStr20 Uint128
@@ -264,6 +276,8 @@ field total_fees_used: Map ByStr20 (Map ByStr20 Uint128) = Emp ByStr20 (Map BySt
 
 field swap_fees_balance: Uint128 = Uint128 0
 field total_burnt_fees: Uint128 = Uint128 0
+
+field day_block_rate: Uint128 = Uint128 2500
 
 
 procedure ThrowIfExpired(deadline_block: BNum)
@@ -319,6 +333,18 @@ procedure IsWhiteListedToken(token: ByStr20)
   end
 end
 
+
+procedure IsSSLTokenSupport(token: ByStr20)
+  op_is_ssl_token <- ssl_pools[token];
+  is_ssl_token = match op_is_ssl_token with | Some value => value | None => False end;
+  match is_ssl_token with
+    | True =>
+    | False =>
+        e = { _exception : "NotSSLToken" };
+        throw e
+  end
+end
+
 procedure ThrowIfGrph(address : ByStr20)
   is_grph = builtin eq address grph_address;
   match is_grph with
@@ -356,13 +382,31 @@ end
 
 procedure ThrowUnlessSenderIsAdmin(account: ByStr20)
   current_admin <- admin;
-  is_owner = builtin eq account current_admin;
-  match is_owner with
+  is_admin = builtin eq account current_admin;
+  match is_admin with
   | True =>
   | False =>
     e = { _exception : "InvalidAdmin" };
     throw e
   end
+end
+
+procedure AddGrphForSSL(account: ByStr20, amount: Uint128)
+    r_balance <- grph_buffer;
+    newBalance = builtin add amount r_balance;
+    grph_buffer := newBalance;
+    msg_to_token = {_tag : "TransferFrom"; _recipient: grph_address; _amount: zero; from: account; to: _this_address; amount: amount};
+    msgs = oneMsg msg_to_token;
+    send msgs
+end
+
+procedure RemoveGrphForSSL(account: ByStr20, amount: Uint128)
+    r_balance <- grph_buffer;
+    newBalance = builtin sub r_balance amount;
+    grph_buffer := newBalance;
+    msg_to_token = {_tag : "Transfer"; _recipient: grph_address; _amount: zero; to: account; amount: amount};
+    msgs = oneMsg msg_to_token;
+    send msgs
 end
 
 procedure Send(coins : Coins, to_address : ByStr20)
@@ -765,7 +809,15 @@ procedure IsSomeAmountResult(op_amount: Option Uint128)
   end
 end
 
-procedure UpdatePool(pool: Pool, grph_amount: Uint128, min_contribution_amount: Uint128, max_token_amount: Uint128, token_address: ByStr20)
+procedure UpdatePool(
+    account: ByStr20,
+    pool: Pool,
+    grph_amount: Uint128,
+    min_contribution_amount: Uint128,
+    max_token_amount: Uint128,
+    token_address: ByStr20,
+    is_ssl: Bool
+)
 
   is_zil = builtin eq token_address empty_address;
   match is_zil with
@@ -776,7 +828,7 @@ procedure UpdatePool(pool: Pool, grph_amount: Uint128, min_contribution_amount: 
 
   match pool with
     | Pool x y =>
-      (* carb reserve, token reserve *)
+      (* grph reserve, token reserve *)
       (* dY = dX * Y / X + 1 *)
       (* dX is always the QA transferred *)
       maybe_result = frac grph_amount x y;
@@ -803,6 +855,8 @@ procedure UpdatePool(pool: Pool, grph_amount: Uint128, min_contribution_amount: 
           throw e
         | True =>
           tokens_in = Coins token delta_y;
+
+
           Receive tokens_in;
 
           new_pool =
@@ -810,24 +864,48 @@ procedure UpdatePool(pool: Pool, grph_amount: Uint128, min_contribution_amount: 
             let new_y = builtin add y delta_y in
           Pool new_x new_y;
           pools[token_address] := new_pool;
-          existing_balance <- balances[token_address][_sender];
-          new_balance = match existing_balance with | Some b => builtin add b new_contribution | None => new_contribution end;
-          balances[token_address][_sender] := new_balance;
+
+          ssl_existing_balance <- ssl_balances[token_address][account];
+          existing_balance <- balances[token_address][account];
+
+          new_balance = match is_ssl with
+            | True =>
+              match ssl_existing_balance with | Some b => builtin add b new_contribution | None => new_contribution end
+            | False =>
+              match existing_balance with | Some b => builtin add b new_contribution | None => new_contribution end
+          end;
+
+          match is_ssl with
+            | True =>
+                ssl_balances[token_address][account] := new_balance;
+                (* update pool time *)
+                currentBlock <- & BLOCKNUMBER;
+                new_time = blockToUint128 currentBlock;
+                ssl_times[token_address][account] := new_time;
+                (* get grph from ssl grph buffer *)
+                r_balance <- grph_buffer;
+                newBalance = builtin sub r_balance grph_amount;
+                grph_buffer := newBalance
+            | False =>
+                balances[token_address][account] := new_balance
+          end;
+
           new_total_contribution = builtin add total_contribution new_contribution;
           total_contributions[token_address] := new_total_contribution;
 
           e = {
             _eventname: "Mint";
             pool: token_address;
-            address: _sender;
+            address: account;
             amount: delta_y;
             grph_amount: new_balance;
             total_contribution: new_total_contribution
           };
           event e;
+
           r_proxy <- stake_proxy;
           tag = "Stake";
-          SendMsgToStakeProxy tag token_address _sender new_balance new_total_contribution
+          SendMsgToStakeProxy tag token_address account new_balance new_total_contribution
       end
   end
 end
@@ -1012,6 +1090,16 @@ transition BurnSwapFees()
     end
 end
 
+transition AddPoolToSSL(pool: ByStr20)
+    ThrowUnlessSenderIsAdmin _sender;
+    ssl_pools[pool] := true
+end
+
+transition RemovePoolFromSSL(pool: ByStr20)
+    ThrowUnlessSenderIsAdmin _sender;
+    delete ssl_pools[pool]
+end
+
 (* Pools functions *)
 
 transition AddLiquidity(
@@ -1029,15 +1117,69 @@ transition AddLiquidity(
   ThrowIfZero max_token_amount;
 
   grph_token = Token grph_address;
-  (* accept all carb *)
+  (* accept all grph *)
   grph_in = Coins grph_token grph_amount;
   Receive grph_in;
 
   maybe_pool <- pools[token_address];
   match maybe_pool with
     | None => CreateNewPool grph_amount max_token_amount token_address
-    | Some pool => UpdatePool pool grph_amount min_contribution_amount max_token_amount token_address
+    | Some pool => UpdatePool _sender pool grph_amount min_contribution_amount max_token_amount token_address false
   end
+end
+
+transition AddSSL(
+    grph_amount: Uint128,
+    token_address: ByStr20,
+    min_contribution_amount: Uint128,
+    max_token_amount: Uint128,
+    deadline_block: BNum
+)
+    IsPaused;
+    IsSSLTokenSupport token_address;
+    ThrowIfExpired deadline_block;
+    ThrowIfGrph token_address;
+    ThrowIfZero max_token_amount;
+
+    maybe_pool <- pools[token_address];
+    match maybe_pool with
+        | None =>
+          e = { _exception : "NoSSLPoolFound" };
+          throw e
+        | Some pool => UpdatePool _sender pool grph_amount min_contribution_amount max_token_amount token_address true
+    end
+end
+
+transition ReleaseSSL(pool: ByStr20)
+    currentBlock <- & BLOCKNUMBER;
+    currentTime = blockToUint128 currentBlock;
+    r_time_rate <- day_block_rate;
+    op_pool_account_time <- ssl_times[pool][_sender];
+    match op_pool_account_time with
+        | Some value =>
+            timeDiff = builtin sub currentTime value;
+            days = builtin div timeDiff r_time_rate;
+            year = Uint128 365;
+            two_years = builtin add year year;
+            lock_time = builtin mul r_time_rate two_years;
+            is_release = uint128_gt timeDiff lock_time;
+            match is_release with
+                | True =>
+                    delete ssl_times[pool][_sender];
+                    op_ssl_balance <- ssl_balances[pool][_sender];
+                    amount = match op_ssl_balance with | Some value => value | None => Uint128 0 end;
+                    delete ssl_balances[pool][_sender];
+                    op_balance <- balances[pool][_sender];
+                    new_balance = match op_balance with | Some value => builtin add value amount | None => amount end;
+                    balances[pool][_sender] := new_balance
+                | False =>
+                    e = { _exception: "NoPoolForAccountFoundForRelease" };
+                    throw e
+            end
+        | None =>
+            e = { _exception: "NoPoolForAccountFoundForRelease" };
+            throw e
+    end
 end
 
 transition RemoveLiquidity(
@@ -1264,6 +1406,15 @@ transition SwapExactTokensForTokens(
         e = { _exception : msg };
         throw e
   end
+end
+
+transition AddGrph(amount: Uint128)
+    AddGrphForSSL _sender amount
+end
+
+transition RemoveGrph(account: ByStr20, amount: Uint128)
+    ThrowUnlessSenderIsOwner;
+    AddGrphForSSL account amount
 end
 
 (* callback functions *)

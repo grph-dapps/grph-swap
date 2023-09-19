@@ -484,12 +484,128 @@ function contract({privateKey, api, version, net, contractAddress}) {
             console.log(JSON.stringify(confirmedTxn, null, 2));
         }
         return confirmedTxn.receipt.success === true;
+    },async AddPoolToSSL(pool, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
+        const args = arguments;
+        const e = new Error();
+        const frame = e.stack.split("\n")[1];
+        const tag = frame.split(" ")[5].split(".")[1];
+        const params = [{"vname":"pool","type":"ByStr20"}].map((param, index) => {
+            if (typeof args[index] === "object") {
+                param.value = args[index];
+            } else {
+                param.value = typeof args[index] === "boolean" ? {constructor: args[index] ? "True" : "False", argtypes: [], arguments: []} : args[index].toString();
+            }
+            param.type = param.type.split("with")[0].trim();
+            return param;
+        });
+        const callTx = await zilliqa.contracts.at(myAddress).callWithoutConfirm(tag, params, {
+            version,
+            amount: new BN(zilAmount),
+            gasPrice: units.toQa(gasPrice.toString(), units.Units.Li),
+            gasLimit: Long.fromNumber(gasLimit),
+        });
+        
+        if(callback) {
+            callback("0x" + callTx.id);
+        }
+        const confirmedTxn = await callTx.confirm(callTx.id);
+        if (!confirmedTxn.receipt.success) {
+            console.log(JSON.stringify(confirmedTxn, null, 2));
+        }
+        return confirmedTxn.receipt.success === true;
+    },async RemovePoolFromSSL(pool, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
+        const args = arguments;
+        const e = new Error();
+        const frame = e.stack.split("\n")[1];
+        const tag = frame.split(" ")[5].split(".")[1];
+        const params = [{"vname":"pool","type":"ByStr20"}].map((param, index) => {
+            if (typeof args[index] === "object") {
+                param.value = args[index];
+            } else {
+                param.value = typeof args[index] === "boolean" ? {constructor: args[index] ? "True" : "False", argtypes: [], arguments: []} : args[index].toString();
+            }
+            param.type = param.type.split("with")[0].trim();
+            return param;
+        });
+        const callTx = await zilliqa.contracts.at(myAddress).callWithoutConfirm(tag, params, {
+            version,
+            amount: new BN(zilAmount),
+            gasPrice: units.toQa(gasPrice.toString(), units.Units.Li),
+            gasLimit: Long.fromNumber(gasLimit),
+        });
+        
+        if(callback) {
+            callback("0x" + callTx.id);
+        }
+        const confirmedTxn = await callTx.confirm(callTx.id);
+        if (!confirmedTxn.receipt.success) {
+            console.log(JSON.stringify(confirmedTxn, null, 2));
+        }
+        return confirmedTxn.receipt.success === true;
     },async AddLiquidity(grph_amount, token_address, min_contribution_amount, max_token_amount, deadline_block, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
         const args = arguments;
         const e = new Error();
         const frame = e.stack.split("\n")[1];
         const tag = frame.split(" ")[5].split(".")[1];
         const params = [{"vname":"grph_amount","type":"Uint128"},{"vname":"token_address","type":"ByStr20"},{"vname":"min_contribution_amount","type":"Uint128"},{"vname":"max_token_amount","type":"Uint128"},{"vname":"deadline_block","type":"BNum"}].map((param, index) => {
+            if (typeof args[index] === "object") {
+                param.value = args[index];
+            } else {
+                param.value = typeof args[index] === "boolean" ? {constructor: args[index] ? "True" : "False", argtypes: [], arguments: []} : args[index].toString();
+            }
+            param.type = param.type.split("with")[0].trim();
+            return param;
+        });
+        const callTx = await zilliqa.contracts.at(myAddress).callWithoutConfirm(tag, params, {
+            version,
+            amount: new BN(zilAmount),
+            gasPrice: units.toQa(gasPrice.toString(), units.Units.Li),
+            gasLimit: Long.fromNumber(gasLimit),
+        });
+        
+        if(callback) {
+            callback("0x" + callTx.id);
+        }
+        const confirmedTxn = await callTx.confirm(callTx.id);
+        if (!confirmedTxn.receipt.success) {
+            console.log(JSON.stringify(confirmedTxn, null, 2));
+        }
+        return confirmedTxn.receipt.success === true;
+    },async AddSSL(grph_amount, token_address, min_contribution_amount, max_token_amount, deadline_block, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
+        const args = arguments;
+        const e = new Error();
+        const frame = e.stack.split("\n")[1];
+        const tag = frame.split(" ")[5].split(".")[1];
+        const params = [{"vname":"grph_amount","type":"Uint128"},{"vname":"token_address","type":"ByStr20"},{"vname":"min_contribution_amount","type":"Uint128"},{"vname":"max_token_amount","type":"Uint128"},{"vname":"deadline_block","type":"BNum"}].map((param, index) => {
+            if (typeof args[index] === "object") {
+                param.value = args[index];
+            } else {
+                param.value = typeof args[index] === "boolean" ? {constructor: args[index] ? "True" : "False", argtypes: [], arguments: []} : args[index].toString();
+            }
+            param.type = param.type.split("with")[0].trim();
+            return param;
+        });
+        const callTx = await zilliqa.contracts.at(myAddress).callWithoutConfirm(tag, params, {
+            version,
+            amount: new BN(zilAmount),
+            gasPrice: units.toQa(gasPrice.toString(), units.Units.Li),
+            gasLimit: Long.fromNumber(gasLimit),
+        });
+        
+        if(callback) {
+            callback("0x" + callTx.id);
+        }
+        const confirmedTxn = await callTx.confirm(callTx.id);
+        if (!confirmedTxn.receipt.success) {
+            console.log(JSON.stringify(confirmedTxn, null, 2));
+        }
+        return confirmedTxn.receipt.success === true;
+    },async ReleaseSSL(pool, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
+        const args = arguments;
+        const e = new Error();
+        const frame = e.stack.split("\n")[1];
+        const tag = frame.split(" ")[5].split(".")[1];
+        const params = [{"vname":"pool","type":"ByStr20"}].map((param, index) => {
             if (typeof args[index] === "object") {
                 param.value = args[index];
             } else {
@@ -629,6 +745,64 @@ function contract({privateKey, api, version, net, contractAddress}) {
             console.log(JSON.stringify(confirmedTxn, null, 2));
         }
         return confirmedTxn.receipt.success === true;
+    },async AddGrph(amount, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
+        const args = arguments;
+        const e = new Error();
+        const frame = e.stack.split("\n")[1];
+        const tag = frame.split(" ")[5].split(".")[1];
+        const params = [{"vname":"amount","type":"Uint128"}].map((param, index) => {
+            if (typeof args[index] === "object") {
+                param.value = args[index];
+            } else {
+                param.value = typeof args[index] === "boolean" ? {constructor: args[index] ? "True" : "False", argtypes: [], arguments: []} : args[index].toString();
+            }
+            param.type = param.type.split("with")[0].trim();
+            return param;
+        });
+        const callTx = await zilliqa.contracts.at(myAddress).callWithoutConfirm(tag, params, {
+            version,
+            amount: new BN(zilAmount),
+            gasPrice: units.toQa(gasPrice.toString(), units.Units.Li),
+            gasLimit: Long.fromNumber(gasLimit),
+        });
+        
+        if(callback) {
+            callback("0x" + callTx.id);
+        }
+        const confirmedTxn = await callTx.confirm(callTx.id);
+        if (!confirmedTxn.receipt.success) {
+            console.log(JSON.stringify(confirmedTxn, null, 2));
+        }
+        return confirmedTxn.receipt.success === true;
+    },async RemoveGrph(account, amount, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
+        const args = arguments;
+        const e = new Error();
+        const frame = e.stack.split("\n")[1];
+        const tag = frame.split(" ")[5].split(".")[1];
+        const params = [{"vname":"account","type":"ByStr20"},{"vname":"amount","type":"Uint128"}].map((param, index) => {
+            if (typeof args[index] === "object") {
+                param.value = args[index];
+            } else {
+                param.value = typeof args[index] === "boolean" ? {constructor: args[index] ? "True" : "False", argtypes: [], arguments: []} : args[index].toString();
+            }
+            param.type = param.type.split("with")[0].trim();
+            return param;
+        });
+        const callTx = await zilliqa.contracts.at(myAddress).callWithoutConfirm(tag, params, {
+            version,
+            amount: new BN(zilAmount),
+            gasPrice: units.toQa(gasPrice.toString(), units.Units.Li),
+            gasLimit: Long.fromNumber(gasLimit),
+        });
+        
+        if(callback) {
+            callback("0x" + callTx.id);
+        }
+        const confirmedTxn = await callTx.confirm(callTx.id);
+        if (!confirmedTxn.receipt.success) {
+            console.log(JSON.stringify(confirmedTxn, null, 2));
+        }
+        return confirmedTxn.receipt.success === true;
     },async TransferFromSuccessCallBack(initiator, sender, recipient, amount, gasPrice = 2000,gasLimit = 2000, zilAmount = 0, callback) {
         const args = arguments;
         const e = new Error();
@@ -688,8 +862,8 @@ function contract({privateKey, api, version, net, contractAddress}) {
         }
         return confirmedTxn.receipt.success === true;
     },
-    events: {"Burnt":{"name":"Burnt","params":[{"name":"pool","type":"ByStr20"},{"name":"address","type":"ByStr20"},{"name":"amount","type":"2c56a107-f016-44ae-8692-4e73af3687dc.Coins"},{"name":"grph_amount","type":"Uint128"},{"name":"total_contributions","type":"Uint128"}]},"FeeSet":{"name":"FeeSet","params":[{"name":"fee","type":"Uint256"}]},"OwnershipTransferred":{"name":"OwnershipTransferred","params":[{"name":"owner","type":"ByStr20"}]},"AddGrphForFees":{"name":"AddGrphForFees","params":[{"name":"amount","type":"Uint128"},{"name":"account","type":"ByStr20"}]},"Mint":{"name":"Mint","params":[{"name":"pool","type":"ByStr20"},{"name":"address","type":"ByStr20"},{"name":"amount","type":"Uint128"},{"name":"grph_amount","type":"Uint128"},{"name":"total_contribution","type":"Uint128"}]},"Swapped":{"name":"Swapped","params":[{"name":"pool","type":"ByStr20"},{"name":"address","type":"ByStr20"},{"name":"input","type":"2c56a107-f016-44ae-8692-4e73af3687dc.Coins"},{"name":"output","type":"2c56a107-f016-44ae-8692-4e73af3687dc.Coins"}]}},
-    fields: {"pools":{"pools":"pools","Map (ByStr20) (2c56a107-f016-44ae-8692-4e73af3687dc.Pool)":"Map (ByStr20) (2c56a107-f016-44ae-8692-4e73af3687dc.Pool)"},"balances":{"balances":"balances","Map (ByStr20) (Map (ByStr20) (Uint128))":"Map (ByStr20) (Map (ByStr20) (Uint128))"},"total_contributions":{"total_contributions":"total_contributions","Map (ByStr20) (Uint128)":"Map (ByStr20) (Uint128)"},"min_grph":{"min_grph":"min_grph","Uint128":"Uint128"},"output_after_fee":{"output_after_fee":"output_after_fee","Uint256":"Uint256"},"stake_proxy":{"stake_proxy":"stake_proxy","ByStr20":"ByStr20"},"grph_balances":{"grph_balances":"grph_balances","Map (ByStr20) (Uint128)":"Map (ByStr20) (Uint128)"},"owner":{"owner":"owner","ByStr20":"ByStr20"},"pending_owner":{"pending_owner":"pending_owner","ByStr20":"ByStr20"},"admin":{"admin":"admin","ByStr20":"ByStr20"},"can_remove_liquidity":{"can_remove_liquidity":"can_remove_liquidity","Map (ByStr20) (Bool)":"Map (ByStr20) (Bool)"},"whitelisted_token":{"whitelisted_token":"whitelisted_token","Map (ByStr20) (Bool)":"Map (ByStr20) (Bool)"},"blacklist_token":{"blacklist_token":"blacklist_token","Map (ByStr20) (Bool)":"Map (ByStr20) (Bool)"},"zil_address":{"zil_address":"zil_address","ByStr20":"ByStr20"},"is_paused":{"is_paused":"is_paused","Bool":"Bool"},"total_input":{"total_input":"total_input","Map (ByStr20) (Uint128)":"Map (ByStr20) (Uint128)"},"total_output":{"total_output":"total_output","Map (ByStr20) (Uint128)":"Map (ByStr20) (Uint128)"},"total_fees_used":{"total_fees_used":"total_fees_used","Map (ByStr20) (Map (ByStr20) (Uint128))":"Map (ByStr20) (Map (ByStr20) (Uint128))"},"swap_fees_balance":{"swap_fees_balance":"swap_fees_balance","Uint128":"Uint128"},"total_burnt_fees":{"total_burnt_fees":"total_burnt_fees","Uint128":"Uint128"}}
+    events: {"Burnt":{"name":"Burnt","params":[{"name":"pool","type":"ByStr20"},{"name":"address","type":"ByStr20"},{"name":"amount","type":"444f1127-aa76-4e31-902c-859c422f7042.Coins"},{"name":"grph_amount","type":"Uint128"},{"name":"total_contributions","type":"Uint128"}]},"FeeSet":{"name":"FeeSet","params":[{"name":"fee","type":"Uint256"}]},"OwnershipTransferred":{"name":"OwnershipTransferred","params":[{"name":"owner","type":"ByStr20"}]},"AddGrphForFees":{"name":"AddGrphForFees","params":[{"name":"amount","type":"Uint128"},{"name":"account","type":"ByStr20"}]},"Mint":{"name":"Mint","params":[{"name":"pool","type":"ByStr20"},{"name":"address","type":"ByStr20"},{"name":"amount","type":"Uint128"},{"name":"grph_amount","type":"Uint128"},{"name":"total_contribution","type":"Uint128"}]},"Swapped":{"name":"Swapped","params":[{"name":"pool","type":"ByStr20"},{"name":"address","type":"ByStr20"},{"name":"input","type":"444f1127-aa76-4e31-902c-859c422f7042.Coins"},{"name":"output","type":"444f1127-aa76-4e31-902c-859c422f7042.Coins"}]}},
+    fields: {"pools":{"pools":"pools","Map (ByStr20) (444f1127-aa76-4e31-902c-859c422f7042.Pool)":"Map (ByStr20) (444f1127-aa76-4e31-902c-859c422f7042.Pool)"},"balances":{"balances":"balances","Map (ByStr20) (Map (ByStr20) (Uint128))":"Map (ByStr20) (Map (ByStr20) (Uint128))"},"total_contributions":{"total_contributions":"total_contributions","Map (ByStr20) (Uint128)":"Map (ByStr20) (Uint128)"},"min_grph":{"min_grph":"min_grph","Uint128":"Uint128"},"output_after_fee":{"output_after_fee":"output_after_fee","Uint256":"Uint256"},"stake_proxy":{"stake_proxy":"stake_proxy","ByStr20":"ByStr20"},"grph_balances":{"grph_balances":"grph_balances","Map (ByStr20) (Uint128)":"Map (ByStr20) (Uint128)"},"owner":{"owner":"owner","ByStr20":"ByStr20"},"pending_owner":{"pending_owner":"pending_owner","ByStr20":"ByStr20"},"admin":{"admin":"admin","ByStr20":"ByStr20"},"can_remove_liquidity":{"can_remove_liquidity":"can_remove_liquidity","Map (ByStr20) (Bool)":"Map (ByStr20) (Bool)"},"whitelisted_token":{"whitelisted_token":"whitelisted_token","Map (ByStr20) (Bool)":"Map (ByStr20) (Bool)"},"blacklist_token":{"blacklist_token":"blacklist_token","Map (ByStr20) (Bool)":"Map (ByStr20) (Bool)"},"zil_address":{"zil_address":"zil_address","ByStr20":"ByStr20"},"is_paused":{"is_paused":"is_paused","Bool":"Bool"},"ssl_pools":{"ssl_pools":"ssl_pools","Map (ByStr20) (Bool)":"Map (ByStr20) (Bool)"},"ssl_balances":{"ssl_balances":"ssl_balances","Map (ByStr20) (Map (ByStr20) (Uint128))":"Map (ByStr20) (Map (ByStr20) (Uint128))"},"ssl_times":{"ssl_times":"ssl_times","Map (ByStr20) (Map (ByStr20) (Uint128))":"Map (ByStr20) (Map (ByStr20) (Uint128))"},"grph_buffer":{"grph_buffer":"grph_buffer","Uint128":"Uint128"},"total_input":{"total_input":"total_input","Map (ByStr20) (Uint128)":"Map (ByStr20) (Uint128)"},"total_output":{"total_output":"total_output","Map (ByStr20) (Uint128)":"Map (ByStr20) (Uint128)"},"total_fees_used":{"total_fees_used":"total_fees_used","Map (ByStr20) (Map (ByStr20) (Uint128))":"Map (ByStr20) (Map (ByStr20) (Uint128))"},"swap_fees_balance":{"swap_fees_balance":"swap_fees_balance","Uint128":"Uint128"},"total_burnt_fees":{"total_burnt_fees":"total_burnt_fees","Uint128":"Uint128"},"day_block_rate":{"day_block_rate":"day_block_rate","Uint128":"Uint128"}}
   };  
 };
 
